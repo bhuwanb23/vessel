@@ -1,26 +1,38 @@
 # Baseline Numbers — Step 0
-# Record these after running llama-cli for the first time.
-# You will compare these against your Step 3 predictor formulas.
+# Recorded after running llama-server with test model.
 
 ## Hardware
-GPU model:
-VRAM total:
-RAM total:
+GPU model: NVIDIA GeForce RTX 5060
+VRAM total: 8151 MiB
+RAM total: 32,216 MB (~32 GB)
 
 ## Model
 Model used: Llama-3.2-3B-Instruct-Q4_K_M.gguf
 Model path: D:\projects\software\local_llm\models\Llama-3.2-3B-Instruct-Q4_K_M.gguf
+Quantization: Q4_K - Medium
+Architecture: Llama (text-only)
+Context size: 54,784 tokens
 
 ## Run Configuration
-Layers offloaded to GPU (-ngl):
-Prompt used:
-Token limit (-n):
+Layers offloaded to GPU: 20 (default, full offload for 3B model)
+Prompt used: "The capital of France is"
+Token limit: 50
 
-## llama.cpp Output (copy from terminal)
-Architecture info (layers, context, embeddings):
-Reported memory usage:
-Reported tokens/sec:
-Generated text:
+## llama.cpp Output
+Prompt eval: 40 tokens in 83.13 ms (481.20 tokens/sec)
+Generation: 3 tokens in 46.08 ms (43.40 tokens/sec)
+Total time: 129.21 ms / 43 tokens
+Generated text: "Paris."
+Stop reason: EOS (end of sequence)
+CUDA graphs: enabled (2 graphs reused)
+VRAM used: ~6997 MiB (model + CUDA context)
+
+## Notes
+- Model loaded fully on GPU (CUDA backend confirmed by CUDA graph messages)
+- Chat format auto-detected: peg-native (Llama 3.2 instruct format)
+- Prompt speed (481 t/s) is high because prompt is short and fully in VRAM
+- Generation speed (43 t/s) is typical for a 3B Q4 model on this GPU
+- First token latency: ~27ms (after prompt eval)
 
 ## Date
-Run date:
+Run date: 2026-08-21
