@@ -23,25 +23,14 @@ else()
 endif()
 
 # ============================================
-# llama.cpp integration
-# ============================================
-# Option A: Link against a pre-built llama.cpp (recommended for development)
-# Option B: Add llama.cpp as a subdirectory (builds together)
-#
-# For now, we build llama.cpp separately via build_llama.ps1,
-# then reference it via find_package or manual linking.
-# This keeps build times short during development.
-
-# TODO: Uncomment when ready to link llama.cpp
-# add_subdirectory(external/llama.cpp)
-
-# ============================================
 # Main executable
 # ============================================
-add_executable(planner src/main.cpp)
+add_executable(planner
+    src/main.cpp
+    src/profiler/ram_profiler.cpp
+)
 
-# TODO: Link against llama.cpp when ready
-# target_link_libraries(planner PRIVATE llama llama-common)
+target_include_directories(planner PRIVATE src)
 
 # ============================================
 # Installation
