@@ -49,14 +49,24 @@ target_link_directories(planner PRIVATE
 target_link_libraries(planner PRIVATE nvml)
 
 # ============================================
+# Metadata Fetcher (Step 2)
+# ============================================
+add_executable(metadata_fetcher
+    src/fetcher/metadata_fetcher.cpp
+    src/fetcher/http_fetcher.cpp
+    src/fetcher/gguf_parser.cpp
+)
+
+target_include_directories(metadata_fetcher PRIVATE src/fetcher)
+target_link_libraries(metadata_fetcher PRIVATE winhttp)
+
+# ============================================
 # HTTP Client test (Step 2 smoke test)
-# Uses WinHTTP (built into Windows, no external deps)
 # ============================================
 add_executable(test_http src/test_curl.cpp)
-
 target_link_libraries(test_http PRIVATE winhttp)
 
 # ============================================
 # Installation
 # ============================================
-install(TARGETS planner test_http DESTINATION bin)
+install(TARGETS planner metadata_fetcher test_http DESTINATION bin)
