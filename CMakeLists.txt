@@ -23,14 +23,29 @@ else()
 endif()
 
 # ============================================
+# CUDA / NVML paths
+# ============================================
+set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9" CACHE PATH "CUDA Toolkit path")
+
+# ============================================
 # Main executable
 # ============================================
 add_executable(planner
     src/main.cpp
     src/profiler/ram_profiler.cpp
+    src/profiler/gpu_profiler.cpp
 )
 
-target_include_directories(planner PRIVATE src)
+target_include_directories(planner PRIVATE
+    src
+    ${CUDA_PATH}/include
+)
+
+target_link_directories(planner PRIVATE
+    ${CUDA_PATH}/lib/x64
+)
+
+target_link_libraries(planner PRIVATE nvml)
 
 # ============================================
 # Installation
