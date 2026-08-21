@@ -1,43 +1,49 @@
 # build_llama.ps1 — Build llama.cpp with CUDA support
 # Run from: D:\projects\software\local_llm
+#
+# This script configures and builds llama.cpp with CUDA (NVIDIA GPU) support.
+# It uses the Ninja generator with MSVC compiler and explicit CUDA paths.
+#
+# Prerequisites:
+#   - Visual Studio 2022/2026 with "Desktop development with C++" workload
+#   - CUDA Toolkit 12.x installed
+#   - pip install ninja (for Ninja build system)
 
 $CMAKE = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-$VSVARS = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvarsall.bat"
 $LLAMA_DIR = "D:\projects\software\local_llm\llama.cpp"
+$CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
 
-# Step 1: Configure with CMake (run inside VS developer environment)
 Write-Host "=== Configuring CMake (CUDA enabled, Release mode) ===" -ForegroundColor Cyan
 
-# Use cmd.exe to set up VS environment and run cmake in one shell
-$configureCmd = @"
-call "$VSVARS" amd64 >nul 2>&1
-"$CMAKE" -B "$LLAMA_DIR\build" -S "$LLAMA_DIR" -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DCMAKE_BUILD_TYPE=Release
-"@
+# Clean previous build
+Remove-Item "$LLAMA_DIR\build\CMakeCache.txt" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$LLAMA_DIR\build\CMakeFiles" -ErrorAction SilentlyContinue
 
-cmd /c $configureCmd
+# Configure with Ninja, CUDA compiler, and -allow-unsupported-compiler flag
+# (needed because CUDA 12.9 doesn't officially support VS 2026)
+& $CMAKE -G Ninja -B "$LLAMA_DIR\build" -S "$LLAMA_DIR" `
+    -DGGML_CUDA=ON `
+    -DCMAKE_CUDA_ARCHITECTURES=120 `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_CUDA_COMPILER="$CUDA_PATH\bin\nvcc.exe" `
+    -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "CMake configure failed!" -ForegroundColor Red
     exit 1
 }
 
-# Step 2: Build (also inside VS developer environment)
 Write-Host "=== Building llama.cpp (this takes 5-15 min first time) ===" -ForegroundColor Cyan
 
-$buildCmd = @"
-call "$VSVARS" amd64 >nul 2>&1
-"$CMAKE" --build "$LLAMA_DIR\build" --config Release -j
-"@
-
-cmd /c $buildCmd
+& $CMAKE --build "$LLAMA_DIR\build" --config Release -j
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
     exit 1
 }
 
-# Step 3: Verify
-$llamaCli = "$LLAMA_DIR\build\bin\Release\llama-cli.exe"
+# Verify
+$llamaCli = "$LLAMA_DIR\build\bin\llama-cli.exe"
 if (Test-Path $llamaCli) {
     Write-Host "=== Build successful! ===" -ForegroundColor Green
     Write-Host "Binary: $llamaCli"
@@ -45,16 +51,7 @@ if (Test-Path $llamaCli) {
     Write-Host "=== Testing --help ===" -ForegroundColor Cyan
     & $llamaCli --help
 } else {
-    # Try alternate output path
-    $llamaCli2 = "$LLAMA_DIR\build\bin\Release\main.exe"
-    if (Test-Path $llamaCli2) {
-        Write-Host "=== Build successful! ===" -ForegroundColor Green
-        Write-Host "Binary: $llamaCli2"
-        & $llamaCli2 --help
-    } else {
-        Write-Host "Build completed but binary not found at expected path." -ForegroundColor Yellow
-        Write-Host "Searching for llama-cli.exe..."
-        Get-ChildItem "$LLAMA_DIR\build" -Recurse -Filter "llama-cli.exe" | Select-Object FullName
-        Get-ChildItem "$LLAMA_DIR\build" -Recurse -Filter "main.exe" | Select-Object FullName
-    }
+    Write-Host "Build completed but binary not found at expected path." -ForegroundColor Yellow
+    Write-Host "Searching for llama-cli.exe..."
+    Get-ChildItem "$LLAMA_DIR\build" -Recurse -Filter "llama-cli.exe" | Select-Object FullName
 }
