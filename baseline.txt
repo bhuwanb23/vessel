@@ -1,0 +1,26 @@
+# Baseline Numbers — Step 0
+# Record these after running llama-cli for the first time.
+# You will compare these against your Step 3 predictor formulas.
+
+## Hardware
+GPU model:
+VRAM total:
+RAM total:
+
+## Model
+Model used: Llama-3.2-3B-Instruct-Q4_K_M.gguf
+Model path: D:\projects\software\local_llm\models\Llama-3.2-3B-Instruct-Q4_K_M.gguf
+
+## Run Configuration
+Layers offloaded to GPU (-ngl):
+Prompt used:
+Token limit (-n):
+
+## llama.cpp Output (copy from terminal)
+Architecture info (layers, context, embeddings):
+Reported memory usage:
+Reported tokens/sec:
+Generated text:
+
+## Date
+Run date:
