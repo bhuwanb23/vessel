@@ -132,3 +132,7 @@ logs/
 data/
 *.json
 !docs/*.json
+
+
+*.zip
+external/
