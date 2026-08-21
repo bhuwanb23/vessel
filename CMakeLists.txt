@@ -26,7 +26,6 @@ endif()
 # External dependencies paths
 # ============================================
 set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9" CACHE PATH "CUDA Toolkit path")
-set(CURL_PATH "${CMAKE_SOURCE_DIR}/external/curl/curl-8.21.0_7-win64-mingw" CACHE PATH "libcurl path")
 
 # ============================================
 # Hardware Profiler (Step 1)
@@ -50,28 +49,14 @@ target_link_directories(planner PRIVATE
 target_link_libraries(planner PRIVATE nvml)
 
 # ============================================
-# libcurl test (Step 2 smoke test)
+# HTTP Client test (Step 2 smoke test)
+# Uses WinHTTP (built into Windows, no external deps)
 # ============================================
-add_executable(test_curl src/test_curl.cpp)
+add_executable(test_http src/test_curl.cpp)
 
-target_include_directories(test_curl PRIVATE
-    ${CURL_PATH}/include
-)
-
-target_link_directories(test_curl PRIVATE
-    ${CURL_PATH}/lib
-)
-
-# Static libcurl + Windows system libraries
-target_link_libraries(test_curl PRIVATE
-    libcurl.a
-    ws2_32
-    crypt32
-    wldap32
-    normaliz
-)
+target_link_libraries(test_http PRIVATE winhttp)
 
 # ============================================
 # Installation
 # ============================================
-install(TARGETS planner test_curl DESTINATION bin)
+install(TARGETS planner test_http DESTINATION bin)
