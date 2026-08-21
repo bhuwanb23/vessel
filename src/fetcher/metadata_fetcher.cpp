@@ -8,11 +8,10 @@
 
 // Check if URL points to a GGUF file
 static bool is_gguf_url(const std::string& url) {
-    // Check if URL ends with .gguf (case-insensitive)
-    std::string lower_url = url;
-    for (auto& c : lower_url) c = static_cast<char>(tolower(c));
-    return lower_url.length() >= 4 &&
-           lower_url.substr(lower_url.length() - 4) == ".gguf";
+    if (url.length() < 5) return false;
+    std::string end_str = url.substr(url.length() - 5);
+    for (auto& c : end_str) c = static_cast<char>(tolower(c));
+    return end_str == ".gguf";
 }
 
 int main(int argc, char* argv[]) {

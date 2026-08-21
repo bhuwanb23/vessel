@@ -167,3 +167,80 @@ bool fetch_gguf_header(const std::string& url, std::vector<uint8_t>& output_buff
     // Fetch first 64KB — enough for all GGUF metadata
     return fetch_range(url, 65535, output_buffer);
 }
+
+bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
+    output_buffer.clear();
+
+    // Convert URL to wide string
+    int wide_len = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, NULL, 0);
+    std::wstring wide_url(wide_len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wide_url[0], wide_len);
+
+    // Parse URL components
+    URL_COMPONENTS url_comp = {};
+    url_comp.dwStructSize = sizeof(url_comp);
+    url_comp.dwSchemeLength = 1;
+    url_comp.dwHostNameLength = 1;
+    url_comp.dwUrlPathLength = 1;
+    url_comp.dwExtraInfoLength = 1;
+
+    if (!WinHttpCrackUrl(wide_url.c_str(), 0, 0, &url_comp)) {
+        fprintf(stderr, "Error: WinHttpCrackUrl() failed (error %lu)\n", GetLastError());
+        return false;
+    }
+
+    std::wstring host_name(url_comp.lpszHostName, url_comp.dwHostNameLength);
+    std::wstring url_path(url_comp.lpszUrlPath, url_comp.dwUrlPathLength);
+    if (url_comp.dwExtraInfoLength > 0) {
+        url_path += std::wstring(url_comp.lpszExtraInfo, url_comp.dwExtraInfoLength);
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME,
+                                      WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return false;
+
+    WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host_name.c_str(), url_comp.nPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", url_path.c_str(),
+                                             NULL, WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    DWORD status_code = 0;
+    DWORD status_size = sizeof(status_code);
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                         WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX);
+
+    if (status_code != 200) {
+        fprintf(stderr, "Error: HTTP %lu (expected 200)\n", status_code);
+        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    DWORD bytes_available = 0;
+    while (WinHttpQueryDataAvailable(hRequest, &bytes_available) && bytes_available > 0) {
+        size_t old_size = output_buffer.size();
+        output_buffer.resize(old_size + bytes_available);
+        DWORD bytes_read = 0;
+        WinHttpReadData(hRequest, output_buffer.data() + old_size, bytes_available, &bytes_read);
+    }
+
+    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+    return true;
+}

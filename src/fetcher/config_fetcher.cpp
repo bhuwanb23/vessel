@@ -85,7 +85,7 @@ bool fetch_config_json(const std::string& repo_url, ModelMetadata& metadata) {
 
     // Fetch full JSON (no range request - it's small)
     std::vector<uint8_t> buffer;
-    if (!fetch_range(config_url, 65535, buffer)) {
+    if (!fetch_full(config_url, buffer)) {
         fprintf(stderr, "Error: Failed to fetch config.json\n");
         return false;
     }
