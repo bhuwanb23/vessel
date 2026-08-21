@@ -55,6 +55,7 @@ add_executable(metadata_fetcher
     src/fetcher/metadata_fetcher.cpp
     src/fetcher/http_fetcher.cpp
     src/fetcher/gguf_parser.cpp
+    src/fetcher/config_fetcher.cpp
 )
 
 target_include_directories(metadata_fetcher PRIVATE src/fetcher)
