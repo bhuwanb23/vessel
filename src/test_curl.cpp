@@ -6,9 +6,7 @@
 
 #pragma comment(lib, "winhttp.lib")
 
-// Simple HTTP GET using WinHTTP
-// Returns HTTP status code and response body
-static int http_get(const std::wstring& url, std::string& response_body) {
+static int http_get(const wchar_t* url, std::string& response_body) {
     // Parse URL components
     URL_COMPONENTS url_comp = {};
     url_comp.dwStructSize = sizeof(url_comp);
@@ -17,12 +15,7 @@ static int http_get(const std::wstring& url, std::string& response_body) {
     url_comp.dwUrlPathLength = 1;
     url_comp.dwExtraInfoLength = 1;
 
-    // Convert char URL to wchar_t for WinHTTP
-    int wide_len = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, NULL, 0);
-    std::wstring wide_url(wide_len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wide_url[0], wide_len);
-
-    if (!WinHttpCrackUrl(wide_url.c_str(), 0, 0, &url_comp)) {
+    if (!WinHttpCrackUrl(url, 0, 0, &url_comp)) {
         fprintf(stderr, "Error: WinHttpCrackUrl() failed (error %lu)\n", GetLastError());
         return 0;
     }
@@ -112,7 +105,7 @@ int main() {
     printf("=== HTTP Client Smoke Test (WinHTTP) ===\n\n");
 
     std::string response;
-    int status = http_get("https://huggingface.co", response);
+    int status = http_get(L"https://huggingface.co", response);
 
     printf("URL:    https://huggingface.co\n");
     printf("Status: %d\n", status);
