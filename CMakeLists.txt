@@ -34,6 +34,7 @@ add_executable(planner
     src/main.cpp
     src/profiler/ram_profiler.cpp
     src/profiler/gpu_profiler.cpp
+    src/profiler/disk_profiler.cpp
 )
 
 target_include_directories(planner PRIVATE
