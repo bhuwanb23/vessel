@@ -77,6 +77,7 @@ add_executable(predictor_test
     src/predictor/speed_predictor.cpp
     src/predictor/context_analyzer.cpp
     src/predictor/predictor_validation.cpp
+    src/predictor/confidence_calculator.cpp
 )
 
 target_include_directories(predictor_test PRIVATE
