@@ -8,11 +8,29 @@
 // Metadata Fetcher (Step 2)
 // =============================================================================
 
-ModelSpec fetch_metadata(const std::string& url) {
-    if (is_gguf_url(url)) {
-        return fetch_gguf_metadata_from_url(url);
+// Helper: Read file header (local files)
+static std::vector<uint8_t> read_file_header_local(const std::string& file_path, size_t bytes) {
+    std::vector<uint8_t> header(bytes);
+    FILE* f = fopen(file_path.c_str(), "rb");
+    if (!f) return {};
+    size_t read = fread(header.data(), 1, bytes, f);
+    fclose(f);
+    header.resize(read);
+    return header;
+}
+
+ModelSpec fetch_metadata(const std::string& url_or_path) {
+    // Check if it's a local file
+    bool is_local = (url_or_path.find(':') != std::string::npos && url_or_path.find("http") == std::string::npos) ||
+                    (url_or_path.size() > 0 && (url_or_path[0] == '/' || url_or_path[0] == '\\')) ||
+                    (url_or_path.find(".gguf") != std::string::npos && url_or_path.find("http") == std::string::npos);
+    
+    if (is_local) {
+        return fetch_gguf_metadata(url_or_path);
+    } else if (is_gguf_url(url_or_path)) {
+        return fetch_gguf_metadata_from_url(url_or_path);
     } else {
-        return fetch_config_metadata(url);
+        return fetch_config_metadata(url_or_path);
     }
 }
 
@@ -20,25 +38,25 @@ ModelSpec fetch_gguf_metadata(const std::string& file_path) {
     ModelSpec model;
     
     // Read GGUF header from local file
-    std::vector<uint8_t> header = read_file_header(file_path, 65536);
+    std::vector<uint8_t> header = read_file_header_local(file_path, 65536);
     if (header.empty()) return model;
     
     // Parse GGUF header
-    GGUFMetadata metadata = parse_gguf_header(header);
-    if (!metadata.valid) return model;
+    ModelMetadata metadata;
+    if (!parse_gguf_header(header.data(), header.size(), metadata)) return model;
     
     // Convert to ModelSpec
     model.architecture = metadata.architecture;
     model.name = metadata.name;
-    model.param_count = metadata.param_count;
+    model.param_count = metadata.parameter_count;
     model.layers = metadata.block_count;
     model.embedding_dim = metadata.embedding_length;
-    model.attention_heads = metadata.attention_head_count;
+    model.attention_heads = metadata.head_count;
     model.kv_heads = metadata.head_count_kv;
     model.head_dim = (model.attention_heads > 0) ? (model.embedding_dim / model.attention_heads) : 0;
     model.ffn_dim = metadata.feed_forward_length;
     model.context_length = metadata.context_length;
-    model.quant_type = metadata.quant_type;
+    model.quant_type = metadata.file_type_name;
     model.bits_per_weight = get_bits_per_weight(metadata.file_type);
     model.source = MetadataSource::GGUF_HEADER;
     
@@ -49,25 +67,25 @@ ModelSpec fetch_gguf_metadata_from_url(const std::string& url) {
     ModelSpec model;
     
     // Fetch first 64KB via range request
-    std::vector<uint8_t> header = fetch_range(url, 0, 65535);
-    if (header.empty()) return model;
+    std::vector<uint8_t> header;
+    if (!fetch_gguf_header(url, header)) return model;
     
     // Parse GGUF header
-    GGUFMetadata metadata = parse_gguf_header(header);
-    if (!metadata.valid) return model;
+    ModelMetadata metadata;
+    if (!parse_gguf_header(header.data(), header.size(), metadata)) return model;
     
     // Convert to ModelSpec
     model.architecture = metadata.architecture;
     model.name = metadata.name;
-    model.param_count = metadata.param_count;
+    model.param_count = metadata.parameter_count;
     model.layers = metadata.block_count;
     model.embedding_dim = metadata.embedding_length;
-    model.attention_heads = metadata.attention_head_count;
+    model.attention_heads = metadata.head_count;
     model.kv_heads = metadata.head_count_kv;
     model.head_dim = (model.attention_heads > 0) ? (model.embedding_dim / model.attention_heads) : 0;
     model.ffn_dim = metadata.feed_forward_length;
     model.context_length = metadata.context_length;
-    model.quant_type = metadata.quant_type;
+    model.quant_type = metadata.file_type_name;
     model.bits_per_weight = get_bits_per_weight(metadata.file_type);
     model.source = MetadataSource::GGUF_HEADER;
     
@@ -83,11 +101,12 @@ ModelSpec fetch_config_metadata(const std::string& repo_url) {
     config_url += "resolve/main/config.json";
     
     // Fetch config.json
-    std::string json = fetch_full(config_url);
+    std::vector<uint8_t> buffer;
+    if (!fetch_full(config_url, buffer)) return model;
+    std::string json(buffer.begin(), buffer.end());
     if (json.empty()) return model;
     
     // Parse config.json (simplified parser)
-    // Look for key fields
     auto get_int = [&](const std::string& key) -> uint32_t {
         size_t pos = json.find("\"" + key + "\"");
         if (pos == std::string::npos) return 0;

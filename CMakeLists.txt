@@ -85,6 +85,42 @@ target_include_directories(predictor_test PRIVATE
 )
 
 # ============================================
+# Step 4: Wire It Together (Unified Binary)
+# ============================================
+add_executable(llm-planner
+    src/step4/main.cpp
+    src/step4/profiler.cpp
+    src/step4/fetcher.cpp
+    src/step4/matrix.cpp
+    src/profiler/ram_profiler.cpp
+    src/profiler/gpu_profiler.cpp
+    src/profiler/disk_profiler.cpp
+    src/fetcher/http_fetcher.cpp
+    src/fetcher/gguf_parser.cpp
+    src/fetcher/config_fetcher.cpp
+    src/predictor/predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/predictor/predictor_validation.cpp
+    src/predictor/confidence_calculator.cpp
+)
+
+target_include_directories(llm-planner PRIVATE
+    include
+    src/profiler
+    src/fetcher
+    src/predictor
+    ${CUDA_PATH}/include
+)
+
+target_link_directories(llm-planner PRIVATE
+    ${CUDA_PATH}/lib/x64
+)
+
+target_link_libraries(llm-planner PRIVATE nvml winhttp)
+
+# ============================================
 # Installation
 # ============================================
-install(TARGETS planner metadata_fetcher test_http predictor_test DESTINATION bin)
+install(TARGETS planner metadata_fetcher test_http predictor_test llm-planner DESTINATION bin)
