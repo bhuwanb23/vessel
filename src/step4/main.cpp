@@ -11,22 +11,28 @@
 #include <algorithm>
 
 // =============================================================================
-// LLM Deployment Planner — Step 4: Pipeline Orchestrator (Phase C)
+// LLM Deployment Planner — Step 4: CLI (Phase D)
 // =============================================================================
-// End-to-end flow:
-//   1. Profile hardware
-//   2. Fetch model metadata
-//   3. Generate method matrix
-//   4. Predict each strategy
-//   5. Rank and display
+// CLI Design:
+//   Required: --model <url>
+//   Optional: --priority <speed|quality|safety>
+//             --context <4k|max|both>
+//             --verbose
+//             --help
 // =============================================================================
 
 // Priority modes
 enum class PriorityMode {
-    SPEED,      // Rank by tokens/sec (fastest first)
-    QUALITY,    // Rank by context length (longest first)
-    SAFETY,     // Rank by confidence (highest first)
-    BALANCED    // Default: speed with viability check
+    SPEED,
+    QUALITY,
+    SAFETY
+};
+
+// Context modes
+enum class ContextMode {
+    FOUR_K,     // Only 4K context
+    MAX,        // Only max-safe context
+    BOTH        // Both 4K and max-safe
 };
 
 // Parse priority string
@@ -34,7 +40,15 @@ PriorityMode parse_priority(const std::string& str) {
     if (str == "speed") return PriorityMode::SPEED;
     if (str == "quality") return PriorityMode::QUALITY;
     if (str == "safety") return PriorityMode::SAFETY;
-    return PriorityMode::BALANCED;
+    return PriorityMode::SPEED;  // Default
+}
+
+// Parse context string
+ContextMode parse_context(const std::string& str) {
+    if (str == "4k" || str == "4K") return ContextMode::FOUR_K;
+    if (str == "max") return ContextMode::MAX;
+    if (str == "both") return ContextMode::BOTH;
+    return ContextMode::BOTH;  // Default
 }
 
 // Get priority name
@@ -43,23 +57,33 @@ const char* get_priority_name(PriorityMode mode) {
         case PriorityMode::SPEED: return "Speed";
         case PriorityMode::QUALITY: return "Quality";
         case PriorityMode::SAFETY: return "Safety";
-        case PriorityMode::BALANCED: return "Balanced";
+        default: return "Unknown";
+    }
+}
+
+// Get context name
+const char* get_context_name(ContextMode mode) {
+    switch (mode) {
+        case ContextMode::FOUR_K: return "4K only";
+        case ContextMode::MAX: return "Max-safe only";
+        case ContextMode::BOTH: return "Both";
         default: return "Unknown";
     }
 }
 
 void print_usage() {
-    printf("Usage: llm-planner <model_url_or_path> [options]\n\n");
+    printf("Usage: llm-planner --model <url_or_path> [options]\n\n");
+    printf("Required:\n");
+    printf("  --model <url_or_path>               Hugging Face GGUF URL or local file path\n\n");
     printf("Options:\n");
-    printf("  --priority <speed|quality|safety|balanced>  Optimize for (default: balanced)\n");
-    printf("  --context <length>                          Override context length\n");
-    printf("  --gpu-layers <count>                        Force specific GPU layer count\n");
-    printf("  --verbose                                   Print full hardware/model reports\n");
-    printf("  --help                                      Show this help\n\n");
+    printf("  --priority <speed|quality|safety>   How to rank strategies (default: speed)\n");
+    printf("  --context <4k|max|both>             Context lengths to evaluate (default: both)\n");
+    printf("  --verbose                           Print full hardware and model reports\n");
+    printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
-    printf("  llm-planner ./models/model.gguf\n");
-    printf("  llm-planner ./models/model.gguf --priority speed\n");
-    printf("  llm-planner ./models/model.gguf --priority quality --verbose\n");
+    printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
+    printf("  llm-planner --model <url> --priority safety\n");
+    printf("  llm-planner --model <url> --context 4k --verbose\n");
 }
 
 // Timer utility
@@ -131,10 +155,10 @@ void print_prediction_table(const std::vector<StrategyResult>& results) {
     printf("\n--- Deployment Strategies ---\n\n");
     
     // Header
-    printf("%-28s %-10s %-10s %-10s %-10s %-8s\n",
+    printf("%-30s %-10s %-10s %-10s %-10s %-8s\n",
            "Strategy", "VRAM", "RAM", "Speed", "TTFT", "Viable?");
-    printf("%-28s %-10s %-10s %-10s %-10s %-8s\n",
-           "----------------------------", "----------", "----------", "----------", "----------", "--------");
+    printf("%-30s %-10s %-10s %-10s %-10s %-8s\n",
+           "------------------------------", "----------", "----------", "----------", "----------", "--------");
     
     for (const auto& result : results) {
         const auto& pred = result.prediction;
@@ -175,7 +199,7 @@ void print_prediction_table(const std::vector<StrategyResult>& results) {
             }
         }
         
-        printf("%-28s %-10s %-10s %-10s %-10s %-8s\n",
+        printf("%-30s %-10s %-10s %-10s %-10s %-8s\n",
                result.description.c_str(),
                vram_str,
                ram_str,
@@ -212,12 +236,26 @@ void sort_by_priority(std::vector<StrategyResult>& results, PriorityMode priorit
                     }
                     return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
                     
-                case PriorityMode::BALANCED:
                 default:
-                    // Speed first, but penalize high memory usage
                     return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
             }
         });
+}
+
+// Filter strategies by context mode
+std::vector<StrategyResult> filter_by_context(const std::vector<StrategyResult>& results, ContextMode mode, uint32_t model_max_ctx) {
+    if (mode == ContextMode::BOTH) return results;
+    
+    std::vector<StrategyResult> filtered;
+    uint32_t target_ctx = (mode == ContextMode::FOUR_K) ? 4096 : model_max_ctx;
+    
+    for (const auto& r : results) {
+        if (r.strategy.context_length == target_ctx) {
+            filtered.push_back(r);
+        }
+    }
+    
+    return filtered;
 }
 
 int main(int argc, char* argv[]) {
@@ -227,44 +265,44 @@ int main(int argc, char* argv[]) {
     printf("=================================================\n");
     
     // Parse arguments
-    if (argc < 2) {
-        print_usage();
-        return 1;
-    }
-    
-    std::string model_path = argv[1];
-    
-    // Check for --help
-    if (model_path == "--help" || model_path == "-h") {
-        print_usage();
-        return 0;
-    }
-    
-    // Parse options
-    PriorityMode priority = PriorityMode::BALANCED;
-    uint32_t context_override = 0;
-    uint32_t gpu_layers_override = 0;
+    std::string model_path;
+    PriorityMode priority = PriorityMode::SPEED;
+    ContextMode context_mode = ContextMode::BOTH;
     bool verbose = false;
     
-    for (int i = 2; i < argc; i++) {
+    bool model_specified = false;
+    
+    for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
-        } else if (arg == "--verbose") {
-            verbose = true;
+        } else if (arg == "--model" && i + 1 < argc) {
+            model_path = argv[++i];
+            model_specified = true;
         } else if (arg == "--priority" && i + 1 < argc) {
             priority = parse_priority(argv[++i]);
         } else if (arg == "--context" && i + 1 < argc) {
-            context_override = static_cast<uint32_t>(std::stoul(argv[++i]));
-        } else if (arg == "--gpu-layers" && i + 1 < argc) {
-            gpu_layers_override = static_cast<uint32_t>(std::stoul(argv[++i]));
+            context_mode = parse_context(argv[++i]);
+        } else if (arg == "--verbose") {
+            verbose = true;
+        } else if (arg[0] != '-' && !model_specified) {
+            // Positional argument (legacy support)
+            model_path = arg;
+            model_specified = true;
         }
     }
     
+    // Check required arguments
+    if (!model_specified) {
+        fprintf(stderr, "Error: --model <url_or_path> is required\n\n");
+        print_usage();
+        return 1;
+    }
+    
     // =========================================================================
-    // Step 1: Profile Hardware (~2-3 seconds for disk benchmark)
+    // Step 1: Profile Hardware
     // =========================================================================
     Timer timer;
     printf("\n[1/5] Profiling hardware...\n");
@@ -279,7 +317,7 @@ int main(int argc, char* argv[]) {
     printf("  (%.1f seconds)\n", timer.elapsed_ms() / 1000.0);
     
     // =========================================================================
-    // Step 2: Fetch Model Metadata (1-5 seconds network)
+    // Step 2: Fetch Model Metadata
     // =========================================================================
     timer.reset();
     printf("\n[2/5] Fetching model metadata...\n");
@@ -287,7 +325,8 @@ int main(int argc, char* argv[]) {
     ModelSpec model = fetch_metadata(model_path);
     
     if (model.layers == 0) {
-        printf("Error: Failed to fetch model metadata from: %s\n", model_path.c_str());
+        fprintf(stderr, "Error: Failed to fetch model metadata from: %s\n", model_path.c_str());
+        fprintf(stderr, "       Check that the URL/path is valid and the file exists.\n");
         return 1;
     }
     
@@ -298,57 +337,28 @@ int main(int argc, char* argv[]) {
     }
     printf("  (%.1f seconds)\n", timer.elapsed_ms() / 1000.0);
     
-    // Apply overrides
-    if (context_override > 0) {
-        model.context_length = context_override;
-    }
-    
     // =========================================================================
-    // Step 3: Generate Method Matrix (<1 ms)
+    // Step 3: Generate Method Matrix
     // =========================================================================
     timer.reset();
     printf("\n[3/5] Generating deployment strategies...\n");
     
-    std::vector<StrategyResult> results;
-    
-    if (gpu_layers_override > 0) {
-        // Generate strategies for specific GPU layer count
-        StrategyConfig strat;
-        strat.gpu_layers = gpu_layers_override;
-        strat.batch_size = 1;
-        strat.kv_quant_bits = 16;
-        
-        uint32_t contexts[] = {4096, model.context_length};
-        
-        for (uint32_t ctx : contexts) {
-            strat.context_length = ctx;
-            strat.placement = (gpu_layers_override >= model.layers) ? 
-                              PlacementStrategy::FULL_GPU : PlacementStrategy::GPU_CPU_SPLIT;
-            
-            Prediction pred = predict(hw, model, strat);
-            
-            StrategyResult result;
-            result.strategy = strat;
-            result.prediction = pred;
-            result.description = format_strategy_description(strat, model.layers);
-            
-            results.push_back(result);
-        }
-    } else {
-        results = generate_matrix(hw, model);
-    }
+    std::vector<StrategyResult> results = generate_matrix(hw, model);
     
     printf("  %zu strategies generated (%.2f ms)\n", results.size(), timer.elapsed_ms());
     
     // =========================================================================
-    // Step 4: Rank by Priority (<1 ms)
+    // Step 4: Filter by Context Mode
     // =========================================================================
-    printf("\n[4/5] Ranking strategies by priority: %s\n", get_priority_name(priority));
-    sort_by_priority(results, priority);
+    results = filter_by_context(results, context_mode, model.context_length);
+    printf("  %zu strategies after context filter: %s\n", results.size(), get_context_name(context_mode));
     
     // =========================================================================
-    // Step 5: Display Results
+    // Step 5: Rank and Display
     // =========================================================================
+    printf("\n[4/5] Ranking by priority: %s\n", get_priority_name(priority));
+    sort_by_priority(results, priority);
+    
     printf("\n[5/5] Results:\n");
     print_prediction_table(results);
     
@@ -357,7 +367,6 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     printf("\n--- Recommendation ---\n");
     
-    // Find best viable strategy
     const StrategyResult* best = nullptr;
     for (const auto& r : results) {
         if (r.prediction.viable) {
@@ -378,6 +387,7 @@ int main(int argc, char* argv[]) {
         printf("  KV Cache:  %s\n", best->strategy.kv_quant_bits == 16 ? "FP16" : "Q8");
     } else {
         printf("\nNo viable strategies found for this hardware/model combination.\n");
+        printf("Consider using a smaller model or reducing context length.\n");
     }
     
     printf("\n=================================================\n");
