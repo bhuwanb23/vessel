@@ -51,8 +51,12 @@ struct ModelSpec {
     uint32_t context_length = 0;        // Maximum context length
 
     // Quantization
-    double bits_per_weight = 0.0;       // Bits per weight (e.g., 4.5 for Q4_K_M)
-
+    double bits_per_weight = 0.0;       // Bits per weight (e.g., 4.85 for Q4_K_M)
+    
+    // MLA-specific fields (for DeepSeek/Kimi-class models)
+    uint32_t kv_lora_rank = 0;           // MLA KV compression rank
+    uint32_t qk_rope_head_dim = 0;      // MLA rope head dimension
+    
     // Derived helpers
     uint32_t get_kv_ratio() const {
         return (kv_heads > 0) ? (attention_heads / kv_heads) : 1;
@@ -129,6 +133,9 @@ struct Prediction {
     double tokens_per_sec = 0.0;        // Predicted decode speed (tokens/sec)
     double ttft_ms = 0.0;               // Predicted time to first token (milliseconds)
     double prompt_eval_tps = 0.0;       // Prompt evaluation speed (tokens/sec)
+    
+    // Context analysis
+    uint32_t max_safe_context = 0;      // Maximum context that fits in memory
 
     // Viability
     bool viable = false;                // Does this strategy fit in available memory?

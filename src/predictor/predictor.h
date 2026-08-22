@@ -26,12 +26,13 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
 uint64_t predict_weight_memory(const ModelSpec& model);
 
 // Predict KV cache memory usage
-// Formula: 2 * layers * context_length * kv_heads * head_dim * kv_quant_bits / 8
-uint64_t predict_kv_cache_memory(const ModelSpec& model, uint32_t context_length, uint32_t kv_quant_bits);
+// Standard: 2 * layers * kv_heads * head_dim * context * batch * bytes_per_element
+// MLA: 2 * layers * kv_lora_rank * context * batch * bytes + layers * qk_rope_head_dim * context * batch * bytes
+uint64_t predict_kv_cache_memory(const ModelSpec& model, uint32_t context_length, uint32_t kv_quant_bits, uint32_t batch_size = 1);
 
 // Predict total memory overhead (activations, buffers, CUDA context)
-// Typically 200-500MB depending on batch size and model
-uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size);
+// GPU: 512 MB base, CPU: 128 MB base (calibrated empirically)
+uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size, bool use_gpu = true);
 
 // Predict decode speed (tokens/sec)
 // Based on memory bandwidth and model size
@@ -46,6 +47,10 @@ double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model,
 
 // Check if a strategy is viable (fits in available memory)
 bool check_viability(const HardwareSpec& hw, uint64_t total_memory_needed);
+
+// Calculate maximum safe context length given memory budget
+// Reverses the KV cache formula to find max context that fits
+uint32_t calculate_max_safe_context(const HardwareSpec& hw, const ModelSpec& model, const StrategyConfig& strategy);
 
 // =============================================================================
 // Utility Functions

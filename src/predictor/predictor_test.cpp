@@ -156,23 +156,93 @@ int main() {
     print_separator();
 
     uint64_t weight_mem = predict_weight_memory(llama_3b);
-    uint64_t kv_mem_4k = predict_kv_cache_memory(llama_3b, 4096, 16);
-    uint64_t kv_mem_32k = predict_kv_cache_memory(llama_3b, 32768, 16);
-    uint64_t kv_mem_128k = predict_kv_cache_memory(llama_3b, 131072, 16);
-    uint64_t overhead = predict_overhead_memory(llama_3b, 1);
+    uint64_t kv_mem_4k = predict_kv_cache_memory(llama_3b, 4096, 16, 1);
+    uint64_t kv_mem_32k = predict_kv_cache_memory(llama_3b, 32768, 16, 1);
+    uint64_t kv_mem_128k = predict_kv_cache_memory(llama_3b, 131072, 16, 1);
+    uint64_t overhead_gpu = predict_overhead_memory(llama_3b, 1, true);
+    uint64_t overhead_cpu = predict_overhead_memory(llama_3b, 1, false);
 
     printf("\nLlama-3.2-3B Q4_K_M Memory Breakdown:\n");
     printf("  Weights:           %s\n", format_bytes(weight_mem).c_str());
     printf("  KV Cache (4K):     %s\n", format_bytes(kv_mem_4k).c_str());
     printf("  KV Cache (32K):    %s\n", format_bytes(kv_mem_32k).c_str());
     printf("  KV Cache (128K):   %s\n", format_bytes(kv_mem_128k).c_str());
-    printf("  Overhead:          %s\n", format_bytes(overhead).c_str());
+    printf("  Overhead (GPU):    %s\n", format_bytes(overhead_gpu).c_str());
+    printf("  Overhead (CPU):    %s\n", format_bytes(overhead_cpu).c_str());
     printf("  ----------------------------------------\n");
-    printf("  Total (4K ctx):    %s\n", format_bytes(weight_mem + kv_mem_4k + overhead).c_str());
-    printf("  Total (32K ctx):   %s\n", format_bytes(weight_mem + kv_mem_32k + overhead).c_str());
-    printf("  Total (128K ctx):  %s\n", format_bytes(weight_mem + kv_mem_128k + overhead).c_str());
+    printf("  Total (4K ctx):    %s\n", format_bytes(weight_mem + kv_mem_4k + overhead_gpu).c_str());
+    printf("  Total (32K ctx):   %s\n", format_bytes(weight_mem + kv_mem_32k + overhead_gpu).c_str());
+    printf("  Total (128K ctx):  %s\n", format_bytes(weight_mem + kv_mem_128k + overhead_gpu).c_str());
     printf("\n  VRAM Available:    %s\n", format_bytes(hw.vram_total_bytes).c_str());
     printf("  RAM Available:     %s\n", format_bytes(hw.ram_free_bytes).c_str());
+    
+    // =========================================================================
+    // Test 6: Max Safe Context
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("MAX SAFE CONTEXT CALCULATION\n");
+    print_separator();
+    
+    printf("\nLlama-3.2-3B Q4_K_M:\n");
+    printf("  Model max context:  %u tokens\n", llama_3b.context_length);
+    
+    // Run prediction to get max_safe_context
+    Prediction pred_max = predict(hw, llama_3b, strat_full_gpu);
+    printf("  Predicted max safe: %u tokens\n", pred_max.max_safe_context);
+    
+    // Calculate memory at max safe context
+    uint64_t kv_at_max = predict_kv_cache_memory(llama_3b, pred_max.max_safe_context, 16, 1);
+    uint64_t total_at_max = weight_mem + kv_at_max + overhead_gpu;
+    printf("  Memory at max:     %s\n", format_bytes(total_at_max).c_str());
+    printf("  VRAM available:    %s\n", format_bytes(hw.vram_total_bytes).c_str());
+    
+    if (total_at_max <= hw.vram_total_bytes) {
+        printf("  Status:            FITS in VRAM\n");
+    } else {
+        printf("  Status:            EXCEEDS VRAM (would split to CPU)\n");
+    }
+    
+    // =========================================================================
+    // Test 7: MLA Model Test (DeepSeek placeholder)
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("MLA ATTENTION TEST (DeepSeek-style)\n");
+    print_separator();
+    
+    ModelSpec deepseek_test;
+    deepseek_test.architecture = "deepseek2";
+    deepseek_test.name = "DeepSeek-V2-Lite (test)";
+    deepseek_test.quant_type = "Q4_K_M";
+    deepseek_test.param_count = 16000000000ULL;  // 16B
+    deepseek_test.layers = 60;
+    deepseek_test.embedding_dim = 2048;
+    deepseek_test.attention_heads = 16;
+    deepseek_test.kv_heads = 16;
+    deepseek_test.head_dim = 128;
+    deepseek_test.ffn_dim = 1408;
+    deepseek_test.context_length = 32768;
+    deepseek_test.bits_per_weight = get_bits_per_weight("Q4_K_M");
+    deepseek_test.kv_lora_rank = 512;           // MLA compression rank
+    deepseek_test.qk_rope_head_dim = 64;        // Rope head dim
+    
+    uint64_t kv_standard = predict_kv_cache_memory(deepseek_test, 4096, 16, 1);
+    
+    // Temporarily set kv_lora_rank to 0 to get standard calculation
+    uint32_t saved_rank = deepseek_test.kv_lora_rank;
+    deepseek_test.kv_lora_rank = 0;
+    uint64_t kv_no_mla = predict_kv_cache_memory(deepseek_test, 4096, 16, 1);
+    deepseek_test.kv_lora_rank = saved_rank;
+    
+    printf("\nDeepSeek-V2-Lite (MLA model):\n");
+    printf("  Architecture:      %s\n", deepseek_test.architecture.c_str());
+    printf("  KV Lora Rank:      %u\n", deepseek_test.kv_lora_rank);
+    printf("  QK Rope Head Dim:  %u\n", deepseek_test.qk_rope_head_dim);
+    printf("  KV cache (MLA):    %s\n", format_bytes(kv_standard).c_str());
+    printf("  KV cache (std):    %s (if MLA not detected)\n", format_bytes(kv_no_mla).c_str());
+    printf("  MLA savings:       %.1fx smaller\n", 
+           (kv_no_mla > 0) ? static_cast<double>(kv_no_mla) / kv_standard : 0.0);
 
     // =========================================================================
     // Summary
@@ -225,13 +295,14 @@ int main() {
 
     printf("\nImplemented functions:\n");
     printf("  - predict_weight_memory(): param_count * bits_per_weight / 8\n");
-    printf("  - predict_kv_cache_memory(): 2 * layers * ctx * kv_heads * head_dim * bits / 8\n");
-    printf("  - predict_overhead_memory(): 350MB base + activations\n");
+    printf("  - predict_kv_cache_memory(): 2 * layers * kv_heads * head_dim * ctx * batch * bytes\n");
+    printf("  - predict_overhead_memory(): 512MB GPU / 128MB CPU + activations\n");
     printf("  - predict_tokens_per_sec(): bandwidth / model_size * efficiency\n");
     printf("  - predict_ttft_ms(): prompt_tokens / prompt_speed * 1000\n");
     printf("  - predict(): main orchestrator\n");
+    printf("  - calculate_max_safe_context(): max context that fits in memory\n");
     printf("  - validate_bpw_from_file(): verify bpw from actual file size\n");
-    printf("\nNext step: Calibrate efficiency factor against real llama.cpp numbers.\n");
+    printf("\nPhase C complete! All memory footprint formulas implemented.\n");
 
     return 0;
 }

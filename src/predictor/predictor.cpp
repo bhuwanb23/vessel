@@ -19,29 +19,56 @@ uint64_t predict_weight_memory(const ModelSpec& model) {
     return static_cast<uint64_t>(bits / 8.0);
 }
 
-uint64_t predict_kv_cache_memory(const ModelSpec& model, uint32_t context_length, uint32_t kv_quant_bits) {
-    if (model.layers == 0 || model.kv_heads == 0 || model.head_dim == 0) return 0;
-
-    // Formula: 2 * layers * context_length * kv_heads * head_dim * kv_quant_bits / 8
-    // The "2" accounts for both K and V caches
-    uint64_t kv_elements = 2ULL * model.layers * context_length * model.kv_heads * model.head_dim;
-    uint64_t kv_bytes = (kv_elements * kv_quant_bits) / 8;
+uint64_t predict_kv_cache_memory(const ModelSpec& model, uint32_t context_length, uint32_t kv_quant_bits, uint32_t batch_size) {
+    if (model.layers == 0) return 0;
+    
+    // Default to batch_size=1 if not provided
+    if (batch_size == 0) batch_size = 1;
+    
+    // Convert kv_quant_bits to bytes per element
+    double bytes_per_kv_element = 2.0;  // Default FP16
+    if (kv_quant_bits == 8) bytes_per_kv_element = 1.0;
+    else if (kv_quant_bits == 4) bytes_per_kv_element = 0.5;
+    else if (kv_quant_bits == 16) bytes_per_kv_element = 2.0;
+    
+    // Check if this is an MLA model (DeepSeek/Kimi-class)
+    bool is_mla = (model.architecture == "deepseek2" || model.architecture == "deepseek_v2");
+    
+    uint64_t kv_bytes = 0;
+    
+    if (is_mla && model.kv_lora_rank > 0) {
+        // MLA attention: compressed KV cache
+        // Formula: 2 * layers * kv_lora_rank * context * batch * bytes
+        //        + layers * qk_rope_head_dim * context * batch * bytes
+        uint64_t kv_lora_part = 2ULL * model.layers * model.kv_lora_rank * context_length * batch_size;
+        uint64_t rope_part = model.layers * model.qk_rope_head_dim * context_length * batch_size;
+        kv_bytes = static_cast<uint64_t>((kv_lora_part + rope_part) * bytes_per_kv_element);
+    } else if (model.kv_heads > 0 && model.head_dim > 0) {
+        // Standard attention: full KV cache per head
+        // Formula: 2 * layers * kv_heads * head_dim * context * batch * bytes
+        uint64_t kv_elements = 2ULL * model.layers * model.kv_heads * model.head_dim * context_length * batch_size;
+        kv_bytes = static_cast<uint64_t>(kv_elements * bytes_per_kv_element);
+    }
+    
     return kv_bytes;
 }
 
-uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size) {
-    // Overhead includes:
-    // - CUDA context: ~200-300MB on Windows
-    // - Activation buffers: depends on batch size and model dimensions
-    // - ggml internal buffers: ~100MB
-    // - OS and driver overhead: ~50MB
-
-    uint64_t base_overhead = 350ULL * 1024 * 1024;  // 350MB base
-
+uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size, bool use_gpu) {
+    // Runtime overhead includes:
+    // - CUDA context initialization (~200-500 MB on NVIDIA)
+    // - ggml compute buffers (scales with batch size and context)
+    // - Driver allocations
+    // - Fragmentation waste
+    //
+    // This constant is calibrated empirically, not derivable analytically.
+    // Starting estimate: 512 MB for CUDA backend, 128 MB for CPU-only.
+    
+    uint64_t base_overhead = use_gpu ? (512ULL * 1024 * 1024) : (128ULL * 1024 * 1024);
+    
     // Activation memory scales with batch_size * embedding_dim * layers
     // Rough estimate: 4 bytes per activation element
     uint64_t activation_bytes = 4ULL * batch_size * model.embedding_dim * model.layers;
-
+    
     return base_overhead + activation_bytes;
 }
 
@@ -210,7 +237,8 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     uint64_t kv_bytes = predict_kv_cache_memory(model, ctx_len, strategy.kv_quant_bits);
 
     // 3. Overhead memory
-    uint64_t overhead_bytes = predict_overhead_memory(model, strategy.batch_size);
+    bool use_gpu = (gpu_layers > 0);
+    uint64_t overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
 
     // 4. Distribute memory based on strategy
     if (gpu_layers >= model.layers) {
@@ -244,6 +272,9 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
 
     pred.memory_total_bytes = pred.memory_vram_bytes + pred.memory_ram_bytes;
 
+    // Calculate max safe context
+    pred.max_safe_context = calculate_max_safe_context(hw, model, strategy);
+    
     // Calculate performance predictions
     pred.tokens_per_sec = predict_tokens_per_sec(hw, model, gpu_layers);
     pred.prompt_eval_tps = predict_prompt_eval_speed(hw, model, gpu_layers);
@@ -317,6 +348,82 @@ const char* get_confidence_name(PredictionConfidence confidence) {
         case PredictionConfidence::LOW: return "Low";
         default: return "Unknown";
     }
+}
+
+// =============================================================================
+// Max Safe Context Calculation
+// =============================================================================
+
+uint32_t calculate_max_safe_context(const HardwareSpec& hw, const ModelSpec& model, const StrategyConfig& strategy) {
+    // Determine effective GPU layers
+    uint32_t gpu_layers = strategy.gpu_layers;
+    if (gpu_layers == 0 && strategy.placement == PlacementStrategy::FULL_GPU) {
+        gpu_layers = model.layers;
+    } else if (strategy.placement == PlacementStrategy::CPU_ONLY) {
+        gpu_layers = 0;
+    }
+    
+    // Calculate weight memory
+    uint64_t weight_bytes = predict_weight_memory(model);
+    
+    // Calculate overhead
+    bool use_gpu = (gpu_layers > 0);
+    uint64_t overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
+    
+    // Determine available memory budget
+    uint64_t memory_budget = 0;
+    if (gpu_layers >= model.layers) {
+        // Full GPU: budget is VRAM
+        memory_budget = hw.vram_free_bytes;
+    } else if (gpu_layers == 0) {
+        // CPU only: budget is RAM
+        memory_budget = hw.ram_free_bytes;
+    } else {
+        // Split: budget is weighted average
+        double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
+        memory_budget = static_cast<uint64_t>(hw.vram_free_bytes * gpu_ratio + hw.ram_free_bytes * (1.0 - gpu_ratio));
+    }
+    
+    // Apply 90% safety margin
+    memory_budget = static_cast<uint64_t>(memory_budget * 0.9);
+    
+    // Calculate available space for KV cache
+    int64_t available_for_kv = static_cast<int64_t>(memory_budget) - weight_bytes - overhead_bytes;
+    if (available_for_kv <= 0) return 0;  // No room for KV cache
+    
+    // Convert kv_quant_bits to bytes per element
+    double bytes_per_kv_element = 2.0;  // Default FP16
+    if (strategy.kv_quant_bits == 8) bytes_per_kv_element = 1.0;
+    else if (strategy.kv_quant_bits == 4) bytes_per_kv_element = 0.5;
+    else if (strategy.kv_quant_bits == 16) bytes_per_kv_element = 2.0;
+    
+    // Check if MLA model
+    bool is_mla = (model.architecture == "deepseek2" || model.architecture == "deepseek_v2");
+    
+    // Calculate KV cache per token
+    double kv_per_token = 0.0;
+    if (is_mla && model.kv_lora_rank > 0) {
+        // MLA: 2 * kv_lora_rank + qk_rope_head_dim per layer
+        kv_per_token = (2.0 * model.kv_lora_rank + model.qk_rope_head_dim) * bytes_per_kv_element;
+    } else if (model.kv_heads > 0 && model.head_dim > 0) {
+        // Standard: 2 * kv_heads * head_dim per layer
+        kv_per_token = 2.0 * model.kv_heads * model.head_dim * bytes_per_kv_element;
+    }
+    
+    if (kv_per_token <= 0) return 0;
+    
+    // Total KV cache per token across all layers
+    double kv_per_token_total = kv_per_token * model.layers * strategy.batch_size;
+    
+    // Max context = available KV space / KV per token
+    uint32_t max_ctx = static_cast<uint32_t>(available_for_kv / kv_per_token_total);
+    
+    // Clamp to model's maximum context
+    if (model.context_length > 0 && max_ctx > model.context_length) {
+        max_ctx = model.context_length;
+    }
+    
+    return max_ctx;
 }
 
 // =============================================================================
