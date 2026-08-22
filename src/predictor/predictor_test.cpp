@@ -113,6 +113,8 @@ int main() {
     llama_3b.ffn_dim          = 8192;
     llama_3b.context_length   = 131072;
     llama_3b.bits_per_weight  = get_bits_per_weight("Q4_K_M");  // 4.85 bpw
+    llama_3b.source = MetadataSource::GGUF_HEADER;  // Came from GGUF header
+    llama_3b.model_type = ModelType::DENSE;           // Dense transformer
 
     StrategyConfig strat_full_gpu;
     strat_full_gpu.placement      = PlacementStrategy::FULL_GPU;
