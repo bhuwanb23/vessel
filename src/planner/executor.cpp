@@ -1,22 +1,12 @@
 #include "executor.h"
+#include "hardware_sampler.h"
 #include <llama.h>
 #include <ggml-backend.h>
-#include <nvml.h>
-#include <windows.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <thread>
 #include <vector>
-#include <atomic>
-#include <mutex>
-
-// =============================================================================
-// NVML State (for live hardware sampling)
-// =============================================================================
-
-static bool nvml_initialized = false;
-static nvmlDevice_t nvml_device = nullptr;
 
 // =============================================================================
 // D1: Backend Lifecycle
@@ -26,27 +16,13 @@ bool executor_init() {
     // Initialize llama.cpp backends (CPU + CUDA)
     llama_backend_init();
     ggml_backend_load_all();
-
-    // Initialize NVML for live hardware sampling
-    nvmlReturn_t ret = nvmlInit();
-    if (ret == NVML_SUCCESS) {
-        nvml_initialized = true;
-        unsigned int device_count = 0;
-        nvmlDeviceGetCount(&device_count);
-        if (device_count > 0) {
-            nvmlDeviceGetHandleByIndex(0, &nvml_device);
-        }
-    }
-
+    // NVML is initialized on first HardwareSampler construction
     return true;
 }
 
 void executor_shutdown() {
-    if (nvml_initialized) {
-        nvmlShutdown();
-        nvml_initialized = false;
-    }
     llama_backend_free();
+    // NVML shutdown happens in HardwareSampler destructor
 }
 
 // =============================================================================
@@ -61,99 +37,7 @@ int get_cpu_thread_count() {
     return static_cast<int>(n);
 }
 
-// =============================================================================
-// Live Hardware Sampler (D5)
-// =============================================================================
 
-struct HardwareSample {
-    uint64_t vram_used_bytes = 0;
-    uint64_t ram_used_bytes = 0;
-    double gpu_temp_c = 0.0;
-    double gpu_power_w = 0.0;
-};
-
-class HardwareSampler {
-    std::thread thread_;
-    std::atomic<bool> running_{false};
-    std::vector<HardwareSample> samples_;
-    std::mutex mutex_;
-
-public:
-    void start() {
-        running_ = true;
-        samples_.clear();
-        thread_ = std::thread([this]() { poll_loop(); });
-    }
-
-    void stop() {
-        running_ = false;
-        if (thread_.joinable()) thread_.join();
-    }
-
-    HardwareSample get_peak() const {
-        HardwareSample peak;
-        for (const auto& s : samples_) {
-            if (s.vram_used_bytes > peak.vram_used_bytes)
-                peak.vram_used_bytes = s.vram_used_bytes;
-            if (s.ram_used_bytes > peak.ram_used_bytes)
-                peak.ram_used_bytes = s.ram_used_bytes;
-            if (s.gpu_temp_c > peak.gpu_temp_c)
-                peak.gpu_temp_c = s.gpu_temp_c;
-            if (s.gpu_power_w > peak.gpu_power_w)
-                peak.gpu_power_w = s.gpu_power_w;
-        }
-        return peak;
-    }
-
-    bool was_throttled() const {
-        // Check if temperature exceeded 83°C (typical thermal throttle point)
-        for (const auto& s : samples_) {
-            if (s.gpu_temp_c > 83.0) return true;
-        }
-        return false;
-    }
-
-private:
-    void poll_loop() {
-        while (running_) {
-            HardwareSample sample;
-
-            // Sample VRAM via NVML
-            if (nvml_initialized && nvml_device) {
-                nvmlMemory_t mem;
-                if (nvmlDeviceGetMemoryInfo(nvml_device, &mem) == NVML_SUCCESS) {
-                    sample.vram_used_bytes = mem.used;
-                }
-
-                // Sample temperature
-                unsigned int temp = 0;
-                if (nvmlDeviceGetTemperature(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
-                    sample.gpu_temp_c = static_cast<double>(temp);
-                }
-
-                // Sample power
-                unsigned int power = 0;
-                if (nvmlDeviceGetPowerUsage(nvml_device, &power) == NVML_SUCCESS) {
-                    sample.gpu_power_w = power / 1000.0;  // milliwatts to watts
-                }
-            }
-
-            // Sample RAM (approximate via GlobalMemoryStatusEx)
-            MEMORYSTATUSEX mem_status;
-            mem_status.dwLength = sizeof(MEMORYSTATUSEX);
-            if (GlobalMemoryStatusEx(&mem_status)) {
-                sample.ram_used_bytes = mem_status.ullTotalPhys - mem_status.ullAvailPhys;
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                samples_.push_back(sample);
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-    }
-};
 
 // =============================================================================
 // KV Cache Type Mapping
@@ -302,7 +186,7 @@ ExecutionResult execute(const std::string& model_path,
     // D5: Start Live Hardware Sampler
     // =========================================================================
     HardwareSampler sampler;
-    sampler.start();
+    sampler.start(0);  // pass max_clock_mhz from Step 1 if available
 
     // =========================================================================
     // D6: Prefill (Prompt Processing)
@@ -396,11 +280,11 @@ ExecutionResult execute(const std::string& model_path,
     // =========================================================================
     sampler.stop();
 
-    HardwareSample peak = sampler.get_peak();
-    result.peak_vram_used_bytes = peak.vram_used_bytes;
-    result.peak_ram_used_bytes = peak.ram_used_bytes;
-    result.peak_gpu_temp_c = peak.gpu_temp_c;
-    result.throttled = sampler.was_throttled();
+    HardwareMetrics hw_metrics = sampler.get_metrics();
+    result.peak_vram_used_bytes = hw_metrics.peak_vram_bytes;
+    result.peak_ram_used_bytes = hw_metrics.peak_ram_bytes;
+    result.peak_gpu_temp_c = hw_metrics.max_temp_celsius;
+    result.throttled = hw_metrics.throttled;
 
     // =========================================================================
     // D9: Cleanup

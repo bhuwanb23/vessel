@@ -78,6 +78,7 @@ set(PLANNER_SOURCES
     src/planner/ranker.cpp
     src/planner/output.cpp
     src/planner/executor.cpp
+    src/planner/hardware_sampler.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
@@ -137,6 +138,7 @@ target_link_libraries(e2e_test PRIVATE ${LLAMA_LIBS} nvml winhttp)
 add_executable(executor_test
     src/planner/executor_test.cpp
     src/planner/executor.cpp
+    src/planner/hardware_sampler.cpp
 )
 
 target_include_directories(executor_test PRIVATE
