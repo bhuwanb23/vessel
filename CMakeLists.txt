@@ -121,6 +121,42 @@ target_link_directories(llm-planner PRIVATE
 target_link_libraries(llm-planner PRIVATE nvml winhttp)
 
 # ============================================
+# Step 4 E2E Test Suite (Phase G)
+# ============================================
+add_executable(e2e_test
+    src/step4/e2e_test.cpp
+    src/step4/profiler.cpp
+    src/step4/fetcher.cpp
+    src/step4/matrix.cpp
+    src/profiler/ram_profiler.cpp
+    src/profiler/gpu_profiler.cpp
+    src/profiler/disk_profiler.cpp
+    src/fetcher/http_fetcher.cpp
+    src/fetcher/gguf_parser.cpp
+    src/fetcher/config_fetcher.cpp
+    src/predictor/predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/predictor/predictor_validation.cpp
+    src/predictor/confidence_calculator.cpp
+)
+
+target_include_directories(e2e_test PRIVATE
+    include
+    src/profiler
+    src/fetcher
+    src/predictor
+    ${CUDA_PATH}/include
+)
+
+target_link_directories(e2e_test PRIVATE
+    ${CUDA_PATH}/lib/x64
+)
+
+target_link_libraries(e2e_test PRIVATE nvml winhttp)
+
+# ============================================
 # Installation
 # ============================================
-install(TARGETS planner metadata_fetcher test_http predictor_test llm-planner DESTINATION bin)
+install(TARGETS planner metadata_fetcher test_http predictor_test llm-planner e2e_test DESTINATION bin)

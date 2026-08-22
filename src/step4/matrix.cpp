@@ -129,27 +129,31 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
     // Generate split points (deduplicate later)
     std::vector<uint32_t> split_points;
     
-    // 1. Full GPU (all layers)
-    split_points.push_back(model.layers);
+    bool has_gpu = (hw.vram_free_bytes > 512ULL * 1024 * 1024);  // >512MB free VRAM
     
-    // 2. Max-fit split (maximum layers that fit in VRAM)
-    if (max_gpu_layers > 0 && max_gpu_layers < model.layers) {
-        split_points.push_back(max_gpu_layers);
+    if (has_gpu) {
+        // 1. Full GPU (all layers)
+        split_points.push_back(model.layers);
+        
+        // 2. Max-fit split (maximum layers that fit in VRAM)
+        if (max_gpu_layers > 0 && max_gpu_layers < model.layers) {
+            split_points.push_back(max_gpu_layers);
+        }
+        
+        // 3. Half split
+        uint32_t half_layers = model.layers / 2;
+        if (half_layers > 0 && half_layers < model.layers) {
+            split_points.push_back(half_layers);
+        }
+        
+        // 4. Minimal GPU (1-4 layers)
+        uint32_t minimal_layers = std::min(4u, model.layers / 4);
+        if (minimal_layers > 0 && minimal_layers < model.layers) {
+            split_points.push_back(minimal_layers);
+        }
     }
     
-    // 3. Half split
-    uint32_t half_layers = model.layers / 2;
-    if (half_layers > 0 && half_layers < model.layers) {
-        split_points.push_back(half_layers);
-    }
-    
-    // 4. Minimal GPU (1-4 layers)
-    uint32_t minimal_layers = std::min(4u, model.layers / 4);
-    if (minimal_layers > 0 && minimal_layers < model.layers) {
-        split_points.push_back(minimal_layers);
-    }
-    
-    // 5. CPU Only (0 layers)
+    // 5. CPU Only (0 layers) — always include
     split_points.push_back(0);
     
     // Sort and deduplicate split points
