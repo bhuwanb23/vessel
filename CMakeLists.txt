@@ -143,14 +143,16 @@ target_include_directories(executor_test PRIVATE
     include
     ${LLAMA_PATH}/include
     ${LLAMA_PATH}/ggml/include
+    ${CUDA_PATH}/include
 )
 target_link_directories(executor_test PRIVATE
     ${LLAMA_BUILD}/src
     ${LLAMA_BUILD}/ggml/src
     ${LLAMA_BUILD}/ggml/src/ggml-cuda
     ${LLAMA_BUILD}/bin
+    ${CUDA_PATH}/lib/x64
 )
-target_link_libraries(executor_test PRIVATE ${LLAMA_LIBS})
+target_link_libraries(executor_test PRIVATE ${LLAMA_LIBS} nvml)
 
 # ============================================
 # predictor_test — Step 3 standalone test

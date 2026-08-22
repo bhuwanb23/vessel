@@ -3,6 +3,7 @@
 #include "types.h"
 #include <string>
 #include <functional>
+#include <vector>
 
 // =============================================================================
 // Step 6 — Executor: llama.cpp Integration
@@ -11,13 +12,9 @@
 // samples hardware state live, and reports predicted-vs-actual.
 //
 // Lifecycle:
-//   1. llama_backend_init()         — once at start
-//   2. llama_model_load_from_file() — load weights from GGUF
-//   3. llama_init_from_model()      — create inference context
-//   4. [inference loop]             — prompt + token generation
-//   5. llama_free()                 — free context
-//   6. llama_model_free()           — free model
-//   7. llama_backend_free()         — once at shutdown
+//   1. executor_init()               — once at start (backends + NVML)
+//   2. execute()                     — load model, run inference, cleanup
+//   3. executor_shutdown()           — once at end (backends + NVML)
 // =============================================================================
 
 // Execution result — actual performance measured during inference
@@ -33,6 +30,10 @@ struct ExecutionResult {
     uint64_t peak_vram_used_bytes = 0;
     uint64_t peak_ram_used_bytes = 0;
 
+    // Hardware state during run
+    double peak_gpu_temp_c = 0.0;     // Peak GPU temperature (Celsius)
+    bool throttled = false;           // Did GPU thermal throttle?
+
     // Generated text
     std::string generated_text;
 
@@ -44,10 +45,10 @@ struct ExecutionResult {
 // Progress callback for inference loop
 using InferProgressCallback = std::function<void(int tokens_generated, double tokens_per_sec)>;
 
-// Initialize llama.cpp backend (call once at program start)
+// Initialize llama.cpp backend + NVML (call once at program start)
 bool executor_init();
 
-// Shutdown llama.cpp backend (call once at program end)
+// Shutdown llama.cpp backend + NVML (call once at program end)
 void executor_shutdown();
 
 // Execute inference with given model and strategy
@@ -55,7 +56,7 @@ void executor_shutdown();
 ExecutionResult execute(const std::string& model_path,
                         const StrategyConfig& strategy,
                         const std::string& prompt,
-                        int max_tokens = 50,
+                        int max_tokens = 100,
                         InferProgressCallback progress = nullptr);
 
 // Get CPU thread count (for n_threads parameter)

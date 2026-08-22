@@ -1,23 +1,51 @@
 #include "executor.h"
 #include <llama.h>
 #include <ggml-backend.h>
+#include <nvml.h>
+#include <windows.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <thread>
 #include <vector>
+#include <atomic>
+#include <mutex>
 
 // =============================================================================
-// Backend Lifecycle
+// NVML State (for live hardware sampling)
+// =============================================================================
+
+static bool nvml_initialized = false;
+static nvmlDevice_t nvml_device = nullptr;
+
+// =============================================================================
+// D1: Backend Lifecycle
 // =============================================================================
 
 bool executor_init() {
+    // Initialize llama.cpp backends (CPU + CUDA)
     llama_backend_init();
-    ggml_backend_load_all();  // Load CPU + CUDA backends
+    ggml_backend_load_all();
+
+    // Initialize NVML for live hardware sampling
+    nvmlReturn_t ret = nvmlInit();
+    if (ret == NVML_SUCCESS) {
+        nvml_initialized = true;
+        unsigned int device_count = 0;
+        nvmlDeviceGetCount(&device_count);
+        if (device_count > 0) {
+            nvmlDeviceGetHandleByIndex(0, &nvml_device);
+        }
+    }
+
     return true;
 }
 
 void executor_shutdown() {
+    if (nvml_initialized) {
+        nvmlShutdown();
+        nvml_initialized = false;
+    }
     llama_backend_free();
 }
 
@@ -34,6 +62,100 @@ int get_cpu_thread_count() {
 }
 
 // =============================================================================
+// Live Hardware Sampler (D5)
+// =============================================================================
+
+struct HardwareSample {
+    uint64_t vram_used_bytes = 0;
+    uint64_t ram_used_bytes = 0;
+    double gpu_temp_c = 0.0;
+    double gpu_power_w = 0.0;
+};
+
+class HardwareSampler {
+    std::thread thread_;
+    std::atomic<bool> running_{false};
+    std::vector<HardwareSample> samples_;
+    std::mutex mutex_;
+
+public:
+    void start() {
+        running_ = true;
+        samples_.clear();
+        thread_ = std::thread([this]() { poll_loop(); });
+    }
+
+    void stop() {
+        running_ = false;
+        if (thread_.joinable()) thread_.join();
+    }
+
+    HardwareSample get_peak() const {
+        HardwareSample peak;
+        for (const auto& s : samples_) {
+            if (s.vram_used_bytes > peak.vram_used_bytes)
+                peak.vram_used_bytes = s.vram_used_bytes;
+            if (s.ram_used_bytes > peak.ram_used_bytes)
+                peak.ram_used_bytes = s.ram_used_bytes;
+            if (s.gpu_temp_c > peak.gpu_temp_c)
+                peak.gpu_temp_c = s.gpu_temp_c;
+            if (s.gpu_power_w > peak.gpu_power_w)
+                peak.gpu_power_w = s.gpu_power_w;
+        }
+        return peak;
+    }
+
+    bool was_throttled() const {
+        // Check if temperature exceeded 83°C (typical thermal throttle point)
+        for (const auto& s : samples_) {
+            if (s.gpu_temp_c > 83.0) return true;
+        }
+        return false;
+    }
+
+private:
+    void poll_loop() {
+        while (running_) {
+            HardwareSample sample;
+
+            // Sample VRAM via NVML
+            if (nvml_initialized && nvml_device) {
+                nvmlMemory_t mem;
+                if (nvmlDeviceGetMemoryInfo(nvml_device, &mem) == NVML_SUCCESS) {
+                    sample.vram_used_bytes = mem.used;
+                }
+
+                // Sample temperature
+                unsigned int temp = 0;
+                if (nvmlDeviceGetTemperature(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
+                    sample.gpu_temp_c = static_cast<double>(temp);
+                }
+
+                // Sample power
+                unsigned int power = 0;
+                if (nvmlDeviceGetPowerUsage(nvml_device, &power) == NVML_SUCCESS) {
+                    sample.gpu_power_w = power / 1000.0;  // milliwatts to watts
+                }
+            }
+
+            // Sample RAM (approximate via GlobalMemoryStatusEx)
+            MEMORYSTATUSEX mem_status;
+            mem_status.dwLength = sizeof(MEMORYSTATUSEX);
+            if (GlobalMemoryStatusEx(&mem_status)) {
+                sample.ram_used_bytes = mem_status.ullTotalPhys - mem_status.ullAvailPhys;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                samples_.push_back(sample);
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }
+};
+
+// =============================================================================
 // KV Cache Type Mapping
 // =============================================================================
 
@@ -47,16 +169,15 @@ static enum ggml_type kv_bits_to_ggml_type(uint32_t kv_bits) {
 }
 
 // =============================================================================
-// Model Parameters
+// D2: Model Parameters
 // =============================================================================
 
 static llama_model_params make_model_params(const StrategyConfig& strategy) {
     llama_model_params params = llama_model_default_params();
 
     // GPU layers: the most critical field
-    // -1 = all layers on GPU, 0 = CPU only
     if (strategy.placement == PlacementStrategy::FULL_GPU) {
-        params.n_gpu_layers = -1;  // all layers
+        params.n_gpu_layers = -1;  // all layers on GPU
     } else if (strategy.placement == PlacementStrategy::GPU_CPU_SPLIT) {
         params.n_gpu_layers = static_cast<int32_t>(strategy.gpu_layers);
     } else {
@@ -66,16 +187,18 @@ static llama_model_params make_model_params(const StrategyConfig& strategy) {
     params.main_gpu = 0;  // single GPU
     params.vocab_only = false;
 
-    // Use mmap for CPU-heavy strategies (saves RAM)
-    // Don't use mmap for full GPU (GPU needs contiguous memory)
-    // Note: llama_model_params doesn't have use_mmap directly,
-    // it's controlled by load_mode
+    // Load mode: mmap for CPU-only (saves RAM), auto for GPU strategies
+    if (strategy.placement == PlacementStrategy::CPU_ONLY) {
+        params.load_mode = LLAMA_LOAD_MODE_MMAP;
+    } else {
+        params.load_mode = LLAMA_LOAD_MODE_AUTO;
+    }
 
     return params;
 }
 
 // =============================================================================
-// Context Parameters
+// D3: Context Parameters
 // =============================================================================
 
 static llama_context_params make_context_params(const StrategyConfig& strategy) {
@@ -123,6 +246,7 @@ static llama_batch make_batch(int32_t n_tokens) {
 }
 
 static void free_batch(llama_batch& batch) {
+    if (batch.n_tokens == 0) return;
     delete[] batch.token;
     delete[] batch.pos;
     delete[] batch.n_seq_id;
@@ -135,7 +259,7 @@ static void free_batch(llama_batch& batch) {
 }
 
 // =============================================================================
-// Main Execute Function
+// Main Execute Function (D1-D5)
 // =============================================================================
 
 ExecutionResult execute(const std::string& model_path,
@@ -148,7 +272,7 @@ ExecutionResult execute(const std::string& model_path,
     auto t_start = std::chrono::high_resolution_clock::now();
 
     // =========================================================================
-    // 1. Load Model
+    // D2: Load Model
     // =========================================================================
     llama_model_params model_params = make_model_params(strategy);
 
@@ -156,40 +280,43 @@ ExecutionResult execute(const std::string& model_path,
         model_path.c_str(), model_params);
 
     if (!model) {
-        result.error_message = "Failed to load model from: " + model_path;
+        result.error_message = "Failed to load model from: " + model_path
+            + " (check file exists and VRAM/RAM is sufficient)";
         return result;
     }
 
     // =========================================================================
-    // 2. Create Context
+    // D3: Create Context
     // =========================================================================
     llama_context_params ctx_params = make_context_params(strategy);
 
     struct llama_context* ctx = llama_init_from_model(model, ctx_params);
 
     if (!ctx) {
-        result.error_message = "Failed to create inference context";
+        result.error_message = "Failed to create inference context"
+            " (VRAM/RAM may be insufficient for requested context length)";
         llama_model_free(model);
         return result;
     }
 
     // =========================================================================
-    // 3. Tokenize Prompt
+    // D4: Tokenize Prompt
     // =========================================================================
     const llama_vocab* vocab = llama_model_get_vocab(model);
 
-    // Allocate a generous buffer for tokens
-    const int32_t MAX_TOKENS = 4096;
-    std::vector<llama_token> tokens(MAX_TOKENS);
+    // Allocate buffer with headroom
+    std::vector<llama_token> tokens(prompt.size() + 32);
 
-    // Tokenize with add_special=false, parse_special=true
+    // Tokenize: add_special=true (adds BOS), parse_special=true
     int32_t n_tokens = llama_tokenize(
         vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
-        tokens.data(), MAX_TOKENS, false, true);
+        tokens.data(), static_cast<int32_t>(tokens.size()),
+        true,   // add_special — adds BOS token for Llama models
+        true);  // parse_special — handles <|start_header_id|> etc.
 
     if (n_tokens < 0) {
-        // Negative return = error, but also indicates needed size
-        result.error_message = "Failed to tokenize prompt (error code: " + std::to_string(n_tokens) + ")";
+        result.error_message = "Failed to tokenize prompt (error: "
+            + std::to_string(n_tokens) + ")";
         llama_free(ctx);
         llama_model_free(model);
         return result;
@@ -207,7 +334,13 @@ ExecutionResult execute(const std::string& model_path,
     printf("  Prompt: %d tokens\n", n_tokens);
 
     // =========================================================================
-    // 4. Prefill (Prompt Processing)
+    // D5: Start Live Hardware Sampler
+    // =========================================================================
+    HardwareSampler sampler;
+    sampler.start();
+
+    // =========================================================================
+    // Prefill (Prompt Processing)
     // =========================================================================
     auto t_prefill_start = std::chrono::high_resolution_clock::now();
 
@@ -216,12 +349,13 @@ ExecutionResult execute(const std::string& model_path,
     for (int32_t i = 0; i < n_tokens; i++) {
         batch.token[i]   = tokens[i];
         batch.pos[i]     = i;
-        batch.logits[i]  = (i == n_tokens - 1) ? 1 : 0;  // only last token needs logits
+        batch.logits[i]  = (i == n_tokens - 1) ? 1 : 0;  // only last needs logits
     }
 
     if (llama_decode(ctx, batch) != 0) {
-        result.error_message = "Failed to decode prompt";
+        result.error_message = "Failed to decode prompt (out of memory?)";
         free_batch(batch);
+        sampler.stop();
         llama_free(ctx);
         llama_model_free(model);
         return result;
@@ -239,17 +373,17 @@ ExecutionResult execute(const std::string& model_path,
     free_batch(batch);
 
     // =========================================================================
-    // 5. Decode (Token Generation)
+    // Decode (Token Generation)
     // =========================================================================
     auto t_decode_start = std::chrono::high_resolution_clock::now();
 
     std::vector<llama_token> generated;
     llama_token new_token;
 
-    // Get the logits from the last position
+    // Get logits from the last position
     float* logits = llama_get_logits_ith(ctx, -1);
 
-    // Simple sampling: argmax (greedy) for MVP
+    // Greedy sampling (argmax) for MVP
     // TODO: Use llama_sampler_chain for proper sampling in later phases
     auto sample_greedy = [](const float* logits, int n_vocab) -> llama_token {
         llama_token best = 0;
@@ -292,7 +426,8 @@ ExecutionResult execute(const std::string& model_path,
         decode_batch.logits[0]  = 1;
 
         if (llama_decode(ctx, decode_batch) != 0) {
-            result.error_message = "Failed to decode token at step " + std::to_string(i);
+            result.error_message = "Failed to decode token at step "
+                + std::to_string(i) + " (out of memory?)";
             free_batch(decode_batch);
             break;
         }
@@ -323,7 +458,18 @@ ExecutionResult execute(const std::string& model_path,
            result.tokens_generated, result.decode_ms, result.decode_tokens_per_sec);
 
     // =========================================================================
-    // 6. Cleanup
+    // D5: Stop Hardware Sampler & Collect Results
+    // =========================================================================
+    sampler.stop();
+
+    HardwareSample peak = sampler.get_peak();
+    result.peak_vram_used_bytes = peak.vram_used_bytes;
+    result.peak_ram_used_bytes = peak.ram_used_bytes;
+    result.peak_gpu_temp_c = peak.gpu_temp_c;
+    result.throttled = sampler.was_throttled();
+
+    // =========================================================================
+    // Cleanup
     // =========================================================================
     llama_free(ctx);
     llama_model_free(model);
