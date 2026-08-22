@@ -488,6 +488,9 @@ void print_usage() {
     printf("  --model-path <path>                 Local GGUF file (for --model URL)\n");
     printf("  --priority <speed|quality|safety>   Rank by (default: speed)\n");
     printf("  --context <4k|max|both>             Contexts to evaluate (default: both)\n");
+    printf("  --execute                           Run inference after planning\n");
+    printf("  --prompt <text>                     Prompt for inference (default: benchmark)\n");
+    printf("  --max-tokens <N>                    Max tokens to generate (default: 100)\n");
     printf("  --verbose                           Full hardware & model reports\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
@@ -495,4 +498,6 @@ void print_usage() {
     printf("  llm-planner --model <url> --model-path ./models/model.gguf\n");
     printf("  llm-planner --model <url> --priority safety\n");
     printf("  llm-planner --model <url> --context 4k --verbose\n");
+    printf("  llm-planner --model <url> --execute --prompt \"What is AI?\"\n");
+    printf("  llm-planner --model <url> --execute --max-tokens 200\n");
 }

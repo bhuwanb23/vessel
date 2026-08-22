@@ -1,5 +1,5 @@
 // =============================================================================
-// LLM Deployment Planner — Step 4+5: CLI & Orchestration
+// LLM Deployment Planner — Step 4+5+6: CLI & Orchestration
 // =============================================================================
 // This file is intentionally small. All logic lives in:
 //   profiler.cpp  — hardware profiling (Step 1)
@@ -8,6 +8,8 @@
 //   ranker.cpp    — priority sorting (Step 5)
 //   output.cpp    — table formatting & printing
 //   predictor.cpp — math formulas (Step 3)
+//   executor.cpp  — llama.cpp inference (Step 6)
+//   comparison_report.cpp — predicted vs actual (Step 6)
 // =============================================================================
 
 #include "types.h"
@@ -16,11 +18,14 @@
 #include "matrix.h"
 #include "ranker.h"
 #include "output.h"
+#include "executor.h"
+#include "comparison_report.h"
 #include "../predictor/predictor.h"
 
 #include <cstdio>
 #include <string>
 #include <chrono>
+#include <cstdlib>
 
 // Timer utility
 class Timer {
@@ -34,6 +39,14 @@ public:
 };
 
 // =============================================================================
+// Default benchmark prompt
+// =============================================================================
+
+static const char* DEFAULT_PROMPT =
+    "The following is a detailed explanation of how quantum computing works, "
+    "step by step:";
+
+// =============================================================================
 // Main
 // =============================================================================
 
@@ -45,6 +58,9 @@ int main(int argc, char* argv[]) {
     ContextMode ctx_mode     = ContextMode::BOTH;
     bool verbose             = false;
     bool model_specified     = false;
+    bool execute_mode        = false;   // --execute: run inference after planning
+    std::string prompt       = DEFAULT_PROMPT;
+    int max_tokens           = 100;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -66,6 +82,13 @@ int main(int argc, char* argv[]) {
             priority = parse_priority(val);
         } else if (arg == "--context" && i + 1 < argc) {
             ctx_mode = parse_context(argv[++i]);
+        } else if (arg == "--prompt" && i + 1 < argc) {
+            prompt = argv[++i];
+        } else if (arg == "--max-tokens" && i + 1 < argc) {
+            max_tokens = atoi(argv[++i]);
+            if (max_tokens <= 0) max_tokens = 100;
+        } else if (arg == "--execute") {
+            execute_mode = true;
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg[0] != '-' && !model_specified) {
@@ -144,7 +167,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (model.source == MetadataSource::CONFIG_JSON) {
-        fprintf(stderr, "\n⚠️  Using config.json fallback (lower confidence).\n");
+        fprintf(stderr, "\nWarning: Using config.json fallback (lower confidence).\n");
         fprintf(stderr, "   For best results, use a pre-quantized GGUF file.\n");
     }
 
@@ -172,6 +195,150 @@ int main(int argc, char* argv[]) {
                t_matrix.elapsed_ms(),
                t_hw.elapsed_ms() + t_meta.elapsed_ms() + t_matrix.elapsed_ms());
     }
+
+    // =========================================================================
+    // Step 6: Interactive Strategy Selection & Execution
+    // =========================================================================
+    if (!execute_mode) {
+        // Plan-only mode: just print the table and exit
+        return 0;
+    }
+
+    // Find viable strategies for selection
+    int viable_count = 0;
+    int total_count = 0;
+    for (size_t i = 0; i < results.size(); i++) {
+        StrategyStatus st = determine_status(hw, results[i].prediction, results[i].strategy);
+        total_count++;
+        if (st == StrategyStatus::VIABLE || st == StrategyStatus::TIGHT)
+            viable_count++;
+    }
+
+    if (viable_count == 0) {
+        fprintf(stderr, "\nNo viable strategies. Cannot execute.\n");
+        return 1;
+    }
+
+    // Prompt user to select
+    printf("\nSelect a strategy to execute (1-%d), or 'q' to quit: ",
+           total_count);
+
+    char input[32];
+    if (!fgets(input, sizeof(input), stdin)) {
+        printf("\nNo input. Exiting.\n");
+        return 0;
+    }
+
+    // Parse input
+    std::string input_str(input);
+    // Strip trailing newline
+    while (!input_str.empty() && (input_str.back() == '\n' || input_str.back() == '\r'))
+        input_str.pop_back();
+
+    if (input_str == "q" || input_str == "Q" || input_str.empty()) {
+        printf("Exiting.\n");
+        return 0;
+    }
+
+    int selection = 0;
+    try {
+        selection = std::stoi(input_str);
+    } catch (...) {
+        fprintf(stderr, "Invalid input. Exiting.\n");
+        return 1;
+    }
+
+    if (selection < 1 || selection > total_count) {
+        fprintf(stderr, "Error: Strategy #%d is out of range (1-%d).\n",
+                selection, total_count);
+        return 1;
+    }
+
+    // Get the selected strategy
+    const StrategyResult& selected = results[selection - 1];
+    StrategyStatus sel_status = determine_status(hw, selected.prediction, selected.strategy);
+
+    // Warn if non-viable
+    if (sel_status == StrategyStatus::NO_FIT) {
+        uint64_t vram_needed = selected.prediction.memory_vram_bytes;
+        uint64_t vram_have = hw.vram_free_bytes;
+        double vram_exceed_gb = (vram_needed > vram_have)
+            ? (vram_needed - vram_have) / 1e9 : 0.0;
+
+        fprintf(stderr, "\nWarning: Strategy #%d is not viable", selection);
+        if (vram_exceed_gb > 0)
+            fprintf(stderr, " (exceeds VRAM by %.1f GB)", vram_exceed_gb);
+        fprintf(stderr, ".\n");
+        fprintf(stderr, "   The model will likely fail to load. Execute anyway? (y/n): ");
+
+        char confirm[8];
+        if (!fgets(confirm, sizeof(confirm), stdin)) {
+            printf("No input. Exiting.\n");
+            return 0;
+        }
+        if (confirm[0] != 'y' && confirm[0] != 'Y') {
+            printf("Cancelled.\n");
+            return 0;
+        }
+    }
+
+    // Print what we're about to do
+    const auto& strat = selected.strategy;
+    const char* placement_name =
+        strat.placement == PlacementStrategy::FULL_GPU     ? "Full GPU" :
+        strat.placement == PlacementStrategy::GPU_CPU_SPLIT ? "GPU+CPU Split" :
+                                                               "CPU Only";
+
+    printf("\n--- Executing Strategy #%d ---\n", selection);
+    printf("Placement:  %s (%u/%u layers)\n", placement_name, strat.gpu_layers, model.layers);
+    printf("Context:    %uK\n", strat.context_length / 1024);
+    printf("KV Cache:   %s\n", strat.kv_quant_bits == 16 ? "FP16" : "Q8");
+    printf("Prompt:     \"%s\"\n", prompt.c_str());
+    printf("Max tokens: %d\n\n", max_tokens);
+
+    // Initialize executor
+    printf("Initializing executor...\n");
+    if (!executor_init()) {
+        fprintf(stderr, "Failed to initialize executor.\n");
+        return 1;
+    }
+
+    // Run inference
+    printf("Running inference...\n\n");
+    ExecutionResult result = execute(
+        model_path,
+        strat,
+        prompt,
+        max_tokens,
+        nullptr
+    );
+
+    if (!result.success) {
+        fprintf(stderr, "\nExecution failed: %s\n", result.error_message.c_str());
+        executor_shutdown();
+        return 1;
+    }
+
+    // Print raw results
+    printf("--- Raw Results ---\n");
+    printf("Prompt eval:  %.1f ms (%.1f tok/s)\n",
+           result.prompt_eval_ms, result.prompt_eval_tokens_per_sec);
+    printf("Decode:       %.1f ms (%.1f tok/s)\n",
+           result.decode_ms, result.decode_tokens_per_sec);
+    printf("Tokens:       %d generated\n", result.tokens_generated);
+    printf("Peak VRAM:    %.2f GB\n", result.peak_vram_used_bytes / 1e9);
+    printf("Peak RAM:     %.2f GB\n", result.peak_ram_used_bytes / 1e9);
+    printf("Peak Temp:    %.0f C\n", result.peak_gpu_temp_c);
+    printf("Throttled:    %s\n", result.throttled ? "YES" : "No");
+    printf("Output:       \"%s\"\n", result.generated_text.c_str());
+
+    // Print comparison report
+    Prediction prediction = predict(hw, model, strat);
+    print_comparison_report(prediction, result, strat);
+
+    // Shutdown
+    executor_shutdown();
+    printf("\nDone.\n");
 
     return 0;
 }
