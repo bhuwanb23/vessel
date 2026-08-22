@@ -199,25 +199,27 @@ bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return false;
+    if (!hSession) { fprintf(stderr, "[fetch_full] WinHttpOpen failed: %lu\n", GetLastError()); return false; }
 
     WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host_name.c_str(), url_comp.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+    if (!hConnect) { fprintf(stderr, "[fetch_full] WinHttpConnect failed: %lu\n", GetLastError()); WinHttpCloseHandle(hSession); return false; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", url_path.c_str(),
                                              NULL, WINHTTP_NO_REFERER,
-                                             WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hRequest) { fprintf(stderr, "[fetch_full] WinHttpOpenRequest failed: %lu\n", GetLastError()); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        fprintf(stderr, "[fetch_full] WinHttpSendRequest failed: %lu\n", GetLastError());
         WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
         return false;
     }
 
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        fprintf(stderr, "[fetch_full] WinHttpReceiveResponse failed: %lu\n", GetLastError());
         WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
         return false;
     }
