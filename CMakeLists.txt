@@ -73,6 +73,10 @@ target_link_libraries(test_http PRIVATE winhttp)
 add_executable(predictor_test
     src/predictor/predictor_test.cpp
     src/predictor/predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/predictor/predictor_validation.cpp
 )
 
 target_include_directories(predictor_test PRIVATE

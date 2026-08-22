@@ -293,16 +293,55 @@ int main() {
                (i+2 < 18) ? quants[i+2] : "", (i+2 < 18) ? get_bits_per_weight(quants[i+2]) : 0.0);
     }
 
-    printf("\nImplemented functions:\n");
-    printf("  - predict_weight_memory(): param_count * bits_per_weight / 8\n");
-    printf("  - predict_kv_cache_memory(): 2 * layers * kv_heads * head_dim * ctx * batch * bytes\n");
-    printf("  - predict_overhead_memory(): 512MB GPU / 128MB CPU + activations\n");
-    printf("  - predict_tokens_per_sec(): bandwidth / model_size * efficiency\n");
-    printf("  - predict_ttft_ms(): prompt_tokens / prompt_speed * 1000\n");
-    printf("  - predict(): main orchestrator\n");
-    printf("  - calculate_max_safe_context(): max context that fits in memory\n");
-    printf("  - validate_bpw_from_file(): verify bpw from actual file size\n");
-    printf("\nPhase C complete! All memory footprint formulas implemented.\n");
+    // =========================================================================
+    // Test 8: Speed Prediction Analysis
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("SPEED PREDICTION ANALYSIS (Phase D)\n");
+    print_separator();
+    
+    printf("\nLlama-3.2-3B Q4_K_M Speed by Placement:\n");
+    printf("  %-20s  %-15s  %-15s\n", "Strategy", "Predicted", "Theoretical Max");
+    printf("  %-20s  %-15s  %-15s\n", "--------------------", "---------------", "---------------");
+    
+    // Full GPU speed
+    double speed_full = predict_decode_speed(hw, llama_3b, 28, 4096, 16);
+    double theoretical_full = (hw.gpu_bandwidth_gbs * 1e9) / predict_bytes_per_token(llama_3b);
+    printf("  %-20s  %-15s  %-15s\n", "Full GPU", format_speed(speed_full).c_str(), format_speed(theoretical_full).c_str());
+    
+    // Split: 20/28 layers on GPU
+    double speed_split_20 = predict_decode_speed(hw, llama_3b, 20, 4096, 16);
+    printf("  %-20s  %-15s\n", "GPU:20 / CPU:8", format_speed(speed_split_20).c_str());
+    
+    // Split: 14/28 layers on GPU (50%)
+    double speed_split_14 = predict_decode_speed(hw, llama_3b, 14, 4096, 16);
+    printf("  %-20s  %-15s\n", "GPU:14 / CPU:14", format_speed(speed_split_14).c_str());
+    
+    // Split: 8/28 layers on GPU
+    double speed_split_8 = predict_decode_speed(hw, llama_3b, 8, 4096, 16);
+    printf("  %-20s  %-15s\n", "GPU:8 / CPU:20", format_speed(speed_split_8).c_str());
+    
+    // CPU only speed
+    double speed_cpu = predict_decode_speed(hw, llama_3b, 0, 4096, 16);
+    double theoretical_cpu = (25.0 * 1e9) / predict_bytes_per_token(llama_3b);
+    printf("  %-20s  %-15s  %-15s\n", "CPU Only", format_speed(speed_cpu).c_str(), format_speed(theoretical_cpu).c_str());
+    
+    printf("\nKey Insight: GPU/CPU split is SEQUENTIAL, not parallel.");
+    printf("\n  Even 71%% on GPU (20/28) is much slower than 100%% GPU.");
+    printf("\n  The CPU layers become a bottleneck.\n");
+    
+    // Show bytes per token
+    printf("\nBytes per token: %.2f GB\n", predict_bytes_per_token(llama_3b) / 1e9);
+    printf("KV bytes per token: %.2f KB\n", predict_kv_bytes_per_token(llama_3b, 16) / 1024.0);
+
+    printf("\nImplemented modules:\n");
+    printf("  memory_predictor.h/cpp  - Weight, KV cache, overhead\n");
+    printf("  speed_predictor.h/cpp   - Decode speed, prompt eval, TTFT\n");
+    printf("  context_analyzer.h/cpp  - Max safe context\n");
+    printf("  predictor_validation.h/cpp - BPW validation\n");
+    printf("  predictor.h/cpp         - Main orchestrator\n");
+    printf("\nPhase D complete! Decode speed formulas implemented.\n");
 
     return 0;
 }
