@@ -232,15 +232,35 @@ void sort_by_priority(std::vector<StrategyResult>& results, PriorityMode priorit
     }
 
     // =========================================================================
-    // Pass 2: Sort by score descending
+    // Pass 2: Stable sort by score descending
     // =========================================================================
-    std::sort(results.begin(), results.end(),
+    // Using std::stable_sort so that strategies with identical scores
+    // preserve their original order from the matrix generator.
+    // This makes the output deterministic and reproducible.
+    //
+    // Sort order:
+    //   1. Viable descending (viable before non-viable)
+    //   2. Score descending (higher is better)
+    //   3. Confidence descending (tiebreaker)
+    //   4. Original order preserved for identical scores (stable sort)
+    // =========================================================================
+    std::stable_sort(results.begin(), results.end(),
         [priority, &hw, min_p, max_p, min_s, max_s, min_t, max_t]
         (const StrategyResult& a, const StrategyResult& b) {
+            // Level 1: viable before non-viable
+            if (a.prediction.viable != b.prediction.viable)
+                return a.prediction.viable > b.prediction.viable;
+
+            // Level 2: higher score is better
             double score_a = calculate_score(a, hw, priority,
                                              min_p, max_p, min_s, max_s, min_t, max_t);
             double score_b = calculate_score(b, hw, priority,
                                              min_p, max_p, min_s, max_s, min_t, max_t);
-            return score_a > score_b;
+            if (score_a != score_b)
+                return score_a > score_b;
+
+            // Level 3: higher confidence is better (tiebreaker)
+            return static_cast<int>(a.prediction.confidence)
+                 > static_cast<int>(b.prediction.confidence);
         });
 }
