@@ -54,7 +54,13 @@ int main(int argc, char* argv[]) {
             model_path = argv[++i];
             model_specified = true;
         } else if (arg == "--priority" && i + 1 < argc) {
-            priority = parse_priority(argv[++i]);
+            std::string val = argv[++i];
+            if (!is_valid_priority(val)) {
+                fprintf(stderr, "Error: Invalid priority '%s'\n", val.c_str());
+                fprintf(stderr, "  Valid options: speed, quality, safety\n");
+                return 1;
+            }
+            priority = parse_priority(val);
         } else if (arg == "--context" && i + 1 < argc) {
             ctx_mode = parse_context(argv[++i]);
         } else if (arg == "--verbose") {

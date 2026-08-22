@@ -18,7 +18,10 @@
 // Priority modes (reused by CLI and output)
 enum class PriorityMode { SPEED, QUALITY, SAFETY };
 
-// Parse priority string from CLI
+// Validate priority string (returns false for invalid values)
+bool is_valid_priority(const std::string& str);
+
+// Parse priority string from CLI (only call after is_valid_priority returns true)
 PriorityMode parse_priority(const std::string& str);
 
 // Get human-readable priority name

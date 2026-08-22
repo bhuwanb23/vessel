@@ -7,11 +7,15 @@
 // Priority Parsing
 // =============================================================================
 
+bool is_valid_priority(const std::string& str) {
+    return str == "speed" || str == "quality" || str == "safety";
+}
+
 PriorityMode parse_priority(const std::string& str) {
     if (str == "speed")   return PriorityMode::SPEED;
     if (str == "quality") return PriorityMode::QUALITY;
     if (str == "safety")  return PriorityMode::SAFETY;
-    return PriorityMode::SPEED;
+    return PriorityMode::SPEED;  // should never reach here if validated
 }
 
 const char* get_priority_name(PriorityMode mode) {
