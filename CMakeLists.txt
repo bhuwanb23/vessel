@@ -28,7 +28,20 @@ endif()
 set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9"
     CACHE PATH "CUDA Toolkit path")
 
-# llama.cpp (built in Step 0)
+# ============================================
+# llama.cpp — Pre-built library (Option B)
+# ============================================
+# Why Option B instead of add_subdirectory (Option A)?
+# CUDA 12.9 does not support VS 2026 as a host compiler, so building
+# llama.cpp from source via add_subdirectory fails at CUDA compilation.
+# llama.cpp is built separately in Step 0 and we link against the result.
+#
+# To rebuild llama.cpp:
+#   cd llama.cpp && mkdir build && cd build
+#   cmake .. -G "Visual Studio 18 2026" -A x64 ^
+#       -DGGML_CUDA=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF
+#   cmake --build . --config Release
+# ============================================
 set(LLAMA_PATH "${CMAKE_SOURCE_DIR}/llama.cpp"
     CACHE PATH "llama.cpp source path")
 set(LLAMA_BUILD "${LLAMA_PATH}/build"
