@@ -6,7 +6,8 @@
 
 // GGUF magic number: "GGUF" in little-endian
 static constexpr uint32_t GGUF_MAGIC = 0x46554747;
-static constexpr uint32_t GGUF_VERSION_3 = 3;
+static constexpr uint32_t GGUF_VERSION_MIN = 2;
+static constexpr uint32_t GGUF_VERSION_MAX = 3;
 
 // Quantization type lookup table
 static const std::map<uint32_t, const char*> QUANT_NAMES = {
@@ -130,11 +131,15 @@ bool parse_gguf_header(const uint8_t* data, size_t data_size, ModelMetadata& met
         return false;
     }
 
-    // Read version
+    // Read version (accept 2 and 3, reject 1 and below)
     uint32_t version = read_le<uint32_t>(data, offset);
     offset += 4;
-    if (version != GGUF_VERSION_3) {
-        fprintf(stderr, "Warning: GGUF version %u (expected %u)\n", version, GGUF_VERSION_3);
+    if (version < GGUF_VERSION_MIN || version > GGUF_VERSION_MAX) {
+        fprintf(stderr, "Error: GGUF version %u not supported (need %u-%u)\n", version, GGUF_VERSION_MIN, GGUF_VERSION_MAX);
+        return false;
+    }
+    if (version < 3) {
+        fprintf(stderr, "Warning: GGUF version %u (older format, some features may differ)\n", version);
     }
 
     // Read n_tensors (skip)

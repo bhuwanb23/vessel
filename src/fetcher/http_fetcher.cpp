@@ -60,6 +60,10 @@ bool fetch_range(const std::string& url, uint64_t range_end, std::vector<uint8_t
     // Set timeouts (10s connect, 30s total)
     WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);
 
+    // Enable automatic redirect following (HuggingFace redirects to CDN)
+    DWORD redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirect_policy, sizeof(redirect_policy));
+
     // Connect
     HINTERNET hConnect = WinHttpConnect(hSession, host_name.c_str(),
                                          url_comp.nPort, 0);
