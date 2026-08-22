@@ -1,12 +1,16 @@
 // =============================================================================
-// Executor Smoke Test — Step 6 Phase A + Phase D
+// Executor Smoke Test — Step 6 Phase A + Phase D + Phase F
 // =============================================================================
 // Tests: model loading, context creation, tokenization, inference,
-//        live hardware sampling, and cleanup.
+//        live hardware sampling, cleanup, and predicted-vs-actual report.
 // =============================================================================
 
 #include "executor.h"
 #include "types.h"
+#include "profiler.h"
+#include "predictor.h"
+#include "comparison_report.h"
+#include "output.h"
 #include <cstdio>
 #include <string>
 
@@ -72,6 +76,38 @@ int main(int argc, char* argv[]) {
     } else {
         printf("Status:            FAILED\n");
         printf("Error:             %s\n", result.error_message.c_str());
+    }
+
+    // =========================================================================
+    // Phase F: Predicted-vs-Actual Comparison Report
+    // =========================================================================
+    if (result.success) {
+        // Profile hardware (live)
+        printf("\n--- Profiling Hardware for Prediction ---\n");
+        HardwareSpec hw = profile_hardware(model_path);
+        print_hardware_brief(hw);
+
+        // Build ModelSpec (hardcoded from Step 2 — same model we're testing)
+        ModelSpec model;
+        model.architecture = "llama";
+        model.name = "Llama 3.2 3B Instruct";
+        model.quant_type = "Q4_K_M";
+        model.source = MetadataSource::GGUF_HEADER;
+        model.param_count = 3212749824ULL;
+        model.layers = 28;
+        model.embedding_dim = 3072;
+        model.attention_heads = 24;
+        model.kv_heads = 8;
+        model.head_dim = 128;
+        model.ffn_dim = 8192;
+        model.context_length = 131072;
+        model.bits_per_weight = 4.85;
+
+        // Get prediction
+        Prediction prediction = predict(hw, model, strategy);
+
+        // Print comparison
+        print_comparison_report(prediction, result, strategy);
     }
 
     // Shutdown

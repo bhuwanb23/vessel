@@ -139,22 +139,17 @@ add_executable(executor_test
     src/planner/executor_test.cpp
     src/planner/executor.cpp
     src/planner/hardware_sampler.cpp
+    src/planner/comparison_report.cpp
+    src/planner/profiler.cpp
+    src/planner/output.cpp
+    src/planner/ranker.cpp
+    ${PROFILER_SOURCES}
+    ${PREDICTOR_SOURCES}
 )
 
-target_include_directories(executor_test PRIVATE
-    include
-    ${LLAMA_PATH}/include
-    ${LLAMA_PATH}/ggml/include
-    ${CUDA_PATH}/include
-)
-target_link_directories(executor_test PRIVATE
-    ${LLAMA_BUILD}/src
-    ${LLAMA_BUILD}/ggml/src
-    ${LLAMA_BUILD}/ggml/src/ggml-cuda
-    ${LLAMA_BUILD}/bin
-    ${CUDA_PATH}/lib/x64
-)
-target_link_libraries(executor_test PRIVATE ${LLAMA_LIBS} nvml)
+target_include_directories(executor_test PRIVATE ${SHARED_INCLUDE_DIRS})
+target_link_directories(executor_test PRIVATE ${SHARED_LINK_DIRS})
+target_link_libraries(executor_test PRIVATE ${LLAMA_LIBS} nvml winhttp)
 
 # ============================================
 # predictor_test — Step 3 standalone test
