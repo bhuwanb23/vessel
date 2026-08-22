@@ -5,6 +5,7 @@
 #include "speed_predictor.h"
 #include "context_analyzer.h"
 #include "predictor_validation.h"
+#include "confidence_calculator.h"
 
 // =============================================================================
 // Main Prediction Function

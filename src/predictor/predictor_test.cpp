@@ -324,6 +324,51 @@ int main() {
     
     // CPU only speed
     double speed_cpu = predict_decode_speed(hw, llama_3b, 0, 4096, 16);
+    
+    // =========================================================================
+    // Test 10: Confidence Level Analysis (Phase F)
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("CONFIDENCE LEVEL ANALYSIS (Phase F)\n");
+    print_separator();
+    
+    // Test with GGUF header (high quality metadata)
+    ModelSpec gguf_model = llama_3b;
+    gguf_model.source = MetadataSource::GGUF_HEADER;
+    gguf_model.model_type = ModelType::DENSE;
+    
+    printf("\nTest 1: GGUF header, dense model, short context\n");
+    ConfidenceResult conf1 = calculate_confidence(gguf_model, hw, 4096, 0);
+    printf("  Confidence: %s\n", confidence_to_string(conf1.level));
+    printf("  Reason:     %s\n", conf1.reason.c_str());
+    
+    printf("\nTest 2: GGUF header, dense model, long context (64K)\n");
+    ConfidenceResult conf2 = calculate_confidence(gguf_model, hw, 65536, 0);
+    printf("  Confidence: %s\n", confidence_to_string(conf2.level));
+    printf("  Reason:     %s\n", conf2.reason.c_str());
+    
+    printf("\nTest 3: Config.json fallback\n");
+    ModelSpec config_model = llama_3b;
+    config_model.source = MetadataSource::CONFIG_JSON;
+    ConfidenceResult conf3 = calculate_confidence(config_model, hw, 4096, 0);
+    printf("  Confidence: %s\n", confidence_to_string(conf3.level));
+    printf("  Reason:     %s\n", conf3.reason.c_str());
+    
+    printf("\nTest 4: Unknown quantization\n");
+    ModelSpec unknown_quant = llama_3b;
+    unknown_quant.bits_per_weight = 0;  // Unknown
+    ConfidenceResult conf4 = calculate_confidence(unknown_quant, hw, 4096, 0);
+    printf("  Confidence: %s\n", confidence_to_string(conf4.level));
+    printf("  Reason:     %s\n", conf4.reason.c_str());
+    
+    printf("\nTest 5: With calibration records (5+)\n");
+    ConfidenceResult conf5 = calculate_confidence(gguf_model, hw, 4096, 10);
+    printf("  Confidence: %s\n", confidence_to_string(conf5.level));
+    printf("  Reason:     %s\n", conf5.reason.c_str());
+    
+    printf("\nNote: Step 3 has no calibration records (Step 7), so HIGH is rare.");
+    printf("\n      This is expected - mechanism will activate in Step 7.\n");
     double theoretical_cpu = (25.0 * 1e9) / predict_bytes_per_token(llama_3b);
     printf("  %-20s  %-15s  %-15s\n", "CPU Only", format_speed(speed_cpu).c_str(), format_speed(theoretical_cpu).c_str());
     

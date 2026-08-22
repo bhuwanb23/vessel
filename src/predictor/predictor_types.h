@@ -29,6 +29,24 @@ struct HardwareSpec {
 };
 
 // =============================================================================
+// Metadata Source (where did the model info come from?)
+// =============================================================================
+enum class MetadataSource {
+    GGUF_HEADER,    // Direct from GGUF header (high confidence)
+    CONFIG_JSON,    // Fallback to HuggingFace config.json (lower confidence)
+    UNKNOWN         // No metadata source
+};
+
+// =============================================================================
+// Model Type (for confidence calculation)
+// =============================================================================
+enum class ModelType {
+    DENSE,          // Standard transformer (all params active)
+    MOE,            // Mixture of Experts (Phase 2)
+    UNKNOWN
+};
+
+// =============================================================================
 // Input Struct 2: Model Metadata (from Step 2 metadata fetcher)
 // =============================================================================
 // NOTE: This extends the existing ModelMetadata from gguf_parser.h
@@ -39,6 +57,10 @@ struct ModelSpec {
     std::string architecture;           // "llama", "qwen2", "phi3", etc.
     std::string name;                   // Model name
     std::string quant_type;             // "Q4_K_M", "Q8_0", etc.
+    
+    // Source tracking (for confidence calculation)
+    MetadataSource source = MetadataSource::UNKNOWN;
+    ModelType model_type = ModelType::DENSE;  // Default to dense
 
     // Dimensions
     uint64_t param_count = 0;           // Number of parameters
@@ -140,6 +162,7 @@ struct Prediction {
     // Viability
     bool viable = false;                // Does this strategy fit in available memory?
     PredictionConfidence confidence = PredictionConfidence::LOW;
+    std::string confidence_reason;      // Why this confidence level was assigned
 
     // Warnings
     std::string warnings;               // Any warnings about the prediction

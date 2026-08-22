@@ -78,17 +78,10 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     // Check viability
     pred.viable = check_viability(hw, pred.memory_total_bytes);
     
-    // Determine confidence
-    if (hw.gpu_bandwidth_gbs > 0 && model.param_count > 0 && model.bits_per_weight > 0) {
-        pred.confidence = PredictionConfidence::HIGH;
-    } else if (model.param_count > 0 && model.bits_per_weight > 0) {
-        pred.confidence = PredictionConfidence::MEDIUM;
-    } else {
-        pred.confidence = PredictionConfidence::LOW;
-        if (model.bits_per_weight == 0) {
-            pred.warnings += "Unknown quantization type - using default bpw estimate. ";
-        }
-    }
+    // Calculate confidence level (Phase F)
+    ConfidenceResult conf = calculate_confidence(model, hw, ctx_len, 0);  // 0 calibration records for now
+    pred.confidence = conf.level;
+    pred.confidence_reason = conf.reason;
     
     // Add warnings
     if (!pred.viable) {
