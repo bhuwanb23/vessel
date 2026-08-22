@@ -92,6 +92,8 @@ add_executable(llm-planner
     src/step4/profiler.cpp
     src/step4/fetcher.cpp
     src/step4/matrix.cpp
+    src/step4/ranker.cpp
+    src/step4/output.cpp
     src/profiler/ram_profiler.cpp
     src/profiler/gpu_profiler.cpp
     src/profiler/disk_profiler.cpp
@@ -128,6 +130,8 @@ add_executable(e2e_test
     src/step4/profiler.cpp
     src/step4/fetcher.cpp
     src/step4/matrix.cpp
+    src/step4/ranker.cpp
+    src/step4/output.cpp
     src/profiler/ram_profiler.cpp
     src/profiler/gpu_profiler.cpp
     src/profiler/disk_profiler.cpp
