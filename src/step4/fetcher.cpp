@@ -60,6 +60,9 @@ ModelSpec fetch_gguf_metadata(const std::string& file_path) {
     model.bits_per_weight = get_bits_per_weight(metadata.file_type);
     model.source = MetadataSource::GGUF_HEADER;
     
+    // Estimate parameters if not provided in GGUF
+    model.estimate_parameters();
+    
     return model;
 }
 
@@ -88,6 +91,9 @@ ModelSpec fetch_gguf_metadata_from_url(const std::string& url) {
     model.quant_type = metadata.file_type_name;
     model.bits_per_weight = get_bits_per_weight(metadata.file_type);
     model.source = MetadataSource::GGUF_HEADER;
+    
+    // Estimate parameters if not provided in GGUF
+    model.estimate_parameters();
     
     return model;
 }
