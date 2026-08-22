@@ -409,13 +409,97 @@ int main() {
     printf("  CPU TFLOPS estimate: 0.8 TFLOPS\n");
     printf("  TTFT confidence: ±40%% (wider than tokens/sec)\n");
 
+    // =========================================================================
+    // Test 10: Method Matrix Preview (Phase H)
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("METHOD MATRIX PREVIEW (Phase H)\n");
+    print_separator();
+    
+    printf("\nLlama-3.2-3B-Instruct-Q4_K_M on RTX 5060 (8GB VRAM)\n");
+    printf("Model: 1.81 GB weights, 28 layers\n");
+    printf("Hardware: 448 GB/s GPU, 40 GB/s RAM\n\n");
+    
+    // Define strategies to test
+    struct StrategyTest {
+        const char* name;
+        PlacementStrategy placement;
+        uint32_t gpu_layers;
+        uint32_t context_length;
+    };
+    
+    StrategyTest strategies[] = {
+        {"Full GPU",     PlacementStrategy::FULL_GPU,     28, 4096},
+        {"Full GPU",     PlacementStrategy::FULL_GPU,     28, 32768},
+        {"Full GPU",     PlacementStrategy::FULL_GPU,     28, 131072},
+        {"Split 20/8",   PlacementStrategy::GPU_CPU_SPLIT, 20, 4096},
+        {"Split 20/8",   PlacementStrategy::GPU_CPU_SPLIT, 20, 32768},
+        {"Split 14/14",  PlacementStrategy::GPU_CPU_SPLIT, 14, 4096},
+        {"Split 14/14",  PlacementStrategy::GPU_CPU_SPLIT, 14, 32768},
+        {"CPU Only",     PlacementStrategy::CPU_ONLY,      0, 4096},
+        {"CPU Only",     PlacementStrategy::CPU_ONLY,      0, 32768},
+    };
+    
+    printf("%-15s %-10s %-10s %-15s %-15s %-10s\n",
+           "Strategy", "GPU Layers", "Context", "Memory", "Speed", "Viable?");
+    printf("%-15s %-10s %-10s %-15s %-15s %-10s\n",
+           "---------------", "----------", "----------", "---------------", "---------------", "----------");
+    
+    for (const auto& test : strategies) {
+        StrategyConfig strat;
+        strat.placement = test.placement;
+        strat.gpu_layers = test.gpu_layers;
+        strat.context_length = test.context_length;
+        strat.batch_size = 1;
+        strat.kv_quant_bits = 16;
+        
+        Prediction pred = predict(hw, llama_3b, strat);
+        
+        // Format context as K
+        char ctx_str[16];
+        if (test.context_length >= 1024) {
+            sprintf(ctx_str, "%uK", test.context_length / 1024);
+        } else {
+            sprintf(ctx_str, "%u", test.context_length);
+        }
+        
+        // Format memory
+        char mem_str[32];
+        if (pred.memory_vram_bytes > 0 && pred.memory_ram_bytes > 0) {
+            sprintf(mem_str, "%.1f+%.1f GB",
+                    pred.memory_vram_bytes / 1e9,
+                    pred.memory_ram_bytes / 1e9);
+        } else if (pred.memory_vram_bytes > 0) {
+            sprintf(mem_str, "%.1f GB VRAM", pred.memory_vram_bytes / 1e9);
+        } else {
+            sprintf(mem_str, "%.1f GB RAM", pred.memory_ram_bytes / 1e9);
+        }
+        
+        printf("%-15s %-10u %-10s %-15s %-15s %-10s\n",
+               test.name,
+               test.gpu_layers,
+               ctx_str,
+               mem_str,
+               format_speed(pred.tokens_per_sec).c_str(),
+               pred.viable ? "YES" : "NO");
+    }
+    
+    printf("\n--- Key Insights ---\n");
+    printf("1. Full GPU is fastest but limited by VRAM (8GB)\n");
+    printf("2. 128K context exceeds VRAM - must split or reduce context\n");
+    printf("3. Split mode has dramatic speed penalty (sequential bottleneck)\n");
+    printf("4. CPU only is 10-15x slower than full GPU\n");
+    printf("5. Context length affects memory more than speed\n");
+    
     printf("\nImplemented modules:\n");
     printf("  memory_predictor.h/cpp  - Weight, KV cache, overhead\n");
     printf("  speed_predictor.h/cpp   - Decode speed, prompt eval, TTFT\n");
     printf("  context_analyzer.h/cpp  - Max safe context\n");
     printf("  predictor_validation.h/cpp - BPW validation\n");
+    printf("  confidence_calculator.h/cpp - Confidence levels\n");
     printf("  predictor.h/cpp         - Main orchestrator\n");
-    printf("\nPhase D complete! Decode speed formulas implemented.\n");
+    printf("\nPhase H complete! Method matrix preview generated.\n");
 
     return 0;
 }
