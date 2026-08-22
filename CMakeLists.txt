@@ -28,6 +28,12 @@ endif()
 set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9"
     CACHE PATH "CUDA Toolkit path")
 
+# llama.cpp (built in Step 0)
+set(LLAMA_PATH "${CMAKE_SOURCE_DIR}/llama.cpp"
+    CACHE PATH "llama.cpp source path")
+set(LLAMA_BUILD "${LLAMA_PATH}/build"
+    CACHE PATH "llama.cpp build path")
+
 # ============================================
 # Shared source files (reused by multiple targets)
 # ============================================
@@ -58,6 +64,7 @@ set(PLANNER_SOURCES
     src/planner/matrix.cpp
     src/planner/ranker.cpp
     src/planner/output.cpp
+    src/planner/executor.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
@@ -66,11 +73,20 @@ set(SHARED_INCLUDE_DIRS
     src/fetcher
     src/predictor
     ${CUDA_PATH}/include
+    ${LLAMA_PATH}/include
+    ${LLAMA_PATH}/ggml/include
 )
 
 set(SHARED_LINK_DIRS
     ${CUDA_PATH}/lib/x64
+    ${LLAMA_BUILD}/src
+    ${LLAMA_BUILD}/ggml/src
+    ${LLAMA_BUILD}/ggml/src/ggml-cuda
+    ${LLAMA_BUILD}/bin
 )
+
+# llama.cpp libraries (link in dependency order)
+set(LLAMA_LIBS llama ggml ggml-base ggml-cpu ggml-cuda)
 
 # ============================================
 # llm-planner — Main unified binary
@@ -85,7 +101,7 @@ add_executable(llm-planner
 
 target_include_directories(llm-planner PRIVATE ${SHARED_INCLUDE_DIRS})
 target_link_directories(llm-planner PRIVATE ${SHARED_LINK_DIRS})
-target_link_libraries(llm-planner PRIVATE nvml winhttp)
+target_link_libraries(llm-planner PRIVATE ${LLAMA_LIBS} nvml winhttp)
 
 # ============================================
 # e2e_test — End-to-end test suite
@@ -100,7 +116,28 @@ add_executable(e2e_test
 
 target_include_directories(e2e_test PRIVATE ${SHARED_INCLUDE_DIRS})
 target_link_directories(e2e_test PRIVATE ${SHARED_LINK_DIRS})
-target_link_libraries(e2e_test PRIVATE nvml winhttp)
+target_link_libraries(e2e_test PRIVATE ${LLAMA_LIBS} nvml winhttp)
+
+# ============================================
+# executor_test — Step 6 smoke test
+# ============================================
+add_executable(executor_test
+    src/planner/executor_test.cpp
+    src/planner/executor.cpp
+)
+
+target_include_directories(executor_test PRIVATE
+    include
+    ${LLAMA_PATH}/include
+    ${LLAMA_PATH}/ggml/include
+)
+target_link_directories(executor_test PRIVATE
+    ${LLAMA_BUILD}/src
+    ${LLAMA_BUILD}/ggml/src
+    ${LLAMA_BUILD}/ggml/src/ggml-cuda
+    ${LLAMA_BUILD}/bin
+)
+target_link_libraries(executor_test PRIVATE ${LLAMA_LIBS})
 
 # ============================================
 # predictor_test — Step 3 standalone test
@@ -118,4 +155,4 @@ target_include_directories(predictor_test PRIVATE
 # ============================================
 # Installation
 # ============================================
-install(TARGETS llm-planner e2e_test predictor_test DESTINATION bin)
+install(TARGETS llm-planner e2e_test executor_test predictor_test DESTINATION bin)
