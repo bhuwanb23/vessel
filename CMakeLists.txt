@@ -23,55 +23,27 @@ else()
 endif()
 
 # ============================================
-# External dependencies paths
+# External dependencies
 # ============================================
-set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9" CACHE PATH "CUDA Toolkit path")
+set(CUDA_PATH "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9"
+    CACHE PATH "CUDA Toolkit path")
 
 # ============================================
-# Hardware Profiler (Step 1)
+# Shared source files (reused by multiple targets)
 # ============================================
-add_executable(planner
-    src/main.cpp
+set(PROFILER_SOURCES
     src/profiler/ram_profiler.cpp
     src/profiler/gpu_profiler.cpp
     src/profiler/disk_profiler.cpp
 )
 
-target_include_directories(planner PRIVATE
-    src
-    ${CUDA_PATH}/include
-)
-
-target_link_directories(planner PRIVATE
-    ${CUDA_PATH}/lib/x64
-)
-
-target_link_libraries(planner PRIVATE nvml)
-
-# ============================================
-# Metadata Fetcher (Step 2)
-# ============================================
-add_executable(metadata_fetcher
-    src/fetcher/metadata_fetcher.cpp
+set(FETCHER_SOURCES
     src/fetcher/http_fetcher.cpp
     src/fetcher/gguf_parser.cpp
     src/fetcher/config_fetcher.cpp
 )
 
-target_include_directories(metadata_fetcher PRIVATE src/fetcher)
-target_link_libraries(metadata_fetcher PRIVATE winhttp)
-
-# ============================================
-# HTTP Client test (Step 2 smoke test)
-# ============================================
-add_executable(test_http src/test_curl.cpp)
-target_link_libraries(test_http PRIVATE winhttp)
-
-# ============================================
-# Predictor Math (Step 3)
-# ============================================
-add_executable(predictor_test
-    src/predictor/predictor_test.cpp
+set(PREDICTOR_SOURCES
     src/predictor/predictor.cpp
     src/predictor/memory_predictor.cpp
     src/predictor/speed_predictor.cpp
@@ -80,35 +52,15 @@ add_executable(predictor_test
     src/predictor/confidence_calculator.cpp
 )
 
-target_include_directories(predictor_test PRIVATE
-    src/predictor
+set(PLANNER_SOURCES
+    src/planner/profiler.cpp
+    src/planner/fetcher.cpp
+    src/planner/matrix.cpp
+    src/planner/ranker.cpp
+    src/planner/output.cpp
 )
 
-# ============================================
-# Step 4: Wire It Together (Unified Binary)
-# ============================================
-add_executable(llm-planner
-    src/step4/main.cpp
-    src/step4/profiler.cpp
-    src/step4/fetcher.cpp
-    src/step4/matrix.cpp
-    src/step4/ranker.cpp
-    src/step4/output.cpp
-    src/profiler/ram_profiler.cpp
-    src/profiler/gpu_profiler.cpp
-    src/profiler/disk_profiler.cpp
-    src/fetcher/http_fetcher.cpp
-    src/fetcher/gguf_parser.cpp
-    src/fetcher/config_fetcher.cpp
-    src/predictor/predictor.cpp
-    src/predictor/memory_predictor.cpp
-    src/predictor/speed_predictor.cpp
-    src/predictor/context_analyzer.cpp
-    src/predictor/predictor_validation.cpp
-    src/predictor/confidence_calculator.cpp
-)
-
-target_include_directories(llm-planner PRIVATE
+set(SHARED_INCLUDE_DIRS
     include
     src/profiler
     src/fetcher
@@ -116,51 +68,54 @@ target_include_directories(llm-planner PRIVATE
     ${CUDA_PATH}/include
 )
 
-target_link_directories(llm-planner PRIVATE
+set(SHARED_LINK_DIRS
     ${CUDA_PATH}/lib/x64
 )
 
+# ============================================
+# llm-planner — Main unified binary
+# ============================================
+add_executable(llm-planner
+    src/planner/main.cpp
+    ${PLANNER_SOURCES}
+    ${PROFILER_SOURCES}
+    ${FETCHER_SOURCES}
+    ${PREDICTOR_SOURCES}
+)
+
+target_include_directories(llm-planner PRIVATE ${SHARED_INCLUDE_DIRS})
+target_link_directories(llm-planner PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(llm-planner PRIVATE nvml winhttp)
 
 # ============================================
-# Step 4 E2E Test Suite (Phase G)
+# e2e_test — End-to-end test suite
 # ============================================
 add_executable(e2e_test
-    src/step4/e2e_test.cpp
-    src/step4/profiler.cpp
-    src/step4/fetcher.cpp
-    src/step4/matrix.cpp
-    src/step4/ranker.cpp
-    src/step4/output.cpp
-    src/profiler/ram_profiler.cpp
-    src/profiler/gpu_profiler.cpp
-    src/profiler/disk_profiler.cpp
-    src/fetcher/http_fetcher.cpp
-    src/fetcher/gguf_parser.cpp
-    src/fetcher/config_fetcher.cpp
-    src/predictor/predictor.cpp
-    src/predictor/memory_predictor.cpp
-    src/predictor/speed_predictor.cpp
-    src/predictor/context_analyzer.cpp
-    src/predictor/predictor_validation.cpp
-    src/predictor/confidence_calculator.cpp
+    src/planner/e2e_test.cpp
+    ${PLANNER_SOURCES}
+    ${PROFILER_SOURCES}
+    ${FETCHER_SOURCES}
+    ${PREDICTOR_SOURCES}
 )
 
-target_include_directories(e2e_test PRIVATE
-    include
-    src/profiler
-    src/fetcher
-    src/predictor
-    ${CUDA_PATH}/include
-)
-
-target_link_directories(e2e_test PRIVATE
-    ${CUDA_PATH}/lib/x64
-)
-
+target_include_directories(e2e_test PRIVATE ${SHARED_INCLUDE_DIRS})
+target_link_directories(e2e_test PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(e2e_test PRIVATE nvml winhttp)
+
+# ============================================
+# predictor_test — Step 3 standalone test
+# ============================================
+add_executable(predictor_test
+    src/predictor/predictor_test.cpp
+    ${PREDICTOR_SOURCES}
+)
+
+target_include_directories(predictor_test PRIVATE
+    include
+    src/predictor
+)
 
 # ============================================
 # Installation
 # ============================================
-install(TARGETS planner metadata_fetcher test_http predictor_test llm-planner e2e_test DESTINATION bin)
+install(TARGETS llm-planner e2e_test predictor_test DESTINATION bin)
