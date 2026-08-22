@@ -1,6 +1,7 @@
 #include "speed_predictor.h"
 #include "memory_predictor.h"
 #include <cmath>
+#include <algorithm>
 
 // =============================================================================
 // Helper Functions
@@ -15,27 +16,13 @@ double predict_bytes_per_token(const ModelSpec& model) {
     return bits / 8.0;
 }
 
-double calculate_effective_bandwidth(const HardwareSpec& hw, uint32_t gpu_layers, uint32_t total_layers) {
-    // Returns the effective bandwidth in GB/s based on placement
-    if (gpu_layers == 0) {
-        // CPU only - default to 40 GB/s (DDR5-5600 estimate for modern systems)
-        return hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 40.0;
-    } else if (gpu_layers >= total_layers) {
-        // Full GPU
-        return hw.gpu_bandwidth_gbs;
-    } else {
-        // Split - returns weighted average for compatibility
-        // NOTE: This is NOT used for actual speed calculation in split mode
-        double gpu_ratio = static_cast<double>(gpu_layers) / total_layers;
-        double cpu_ratio = 1.0 - gpu_ratio;
-        double gpu_bw = hw.gpu_bandwidth_gbs > 0 ? hw.gpu_bandwidth_gbs : 0;
-        double cpu_bw = hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 25.0;
-        return (gpu_ratio * gpu_bw) + (cpu_ratio * cpu_bw);
-    }
-}
-
 // =============================================================================
-// Decode Speed Prediction (Phase D)
+// Decode Speed Prediction (Phase D) — FIXED: Split mode efficiency
+// =============================================================================
+// Key insight from Phase H evaluation:
+// - Full GPU: memory-bandwidth-bound, efficiency ~27% of theoretical
+// - Split mode: CPU layers are bottleneck, CPU operates near theoretical BW
+// - CPU-only: near theoretical bandwidth (no GPU overhead)
 // =============================================================================
 
 double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model, 
@@ -60,26 +47,54 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
     
     // =========================================================================
     // FULL_GPU: Simple case - all weights in VRAM
+    // Memory-bandwidth-bound: GPU has overhead from kernel launch, cache misses
+    // Calibrated: RTX 5060 + Llama-3.2-3B: 61.3 t/s actual vs 261 t/s theoretical
     // =========================================================================
     if (gpu_layers >= model.layers) {
         double gpu_bw = hw.gpu_bandwidth_gbs;
         if (gpu_bw <= 0) return 0.0;
         
-        // tokens_per_sec = bandwidth / bytes_per_token
-        tokens_per_sec = (gpu_bw * 1e9) / total_bytes_per_token;
+        // Theoretical: bandwidth / bytes_per_token
+        double theoretical_tps = (gpu_bw * 1e9) / total_bytes_per_token;
+        
+        // Efficiency: 27% for full GPU (calibrated against real hardware)
+        double efficiency = 0.27;
+        
+        // Penalize models that barely fit in VRAM (cache thrashing)
+        if (hw.vram_total_bytes > 0) {
+            double weight_bytes = static_cast<double>(predict_weight_memory(model));
+            double model_fit_ratio = weight_bytes / hw.vram_total_bytes;
+            if (model_fit_ratio > 0.8) {
+                efficiency *= 0.8;
+            }
+        }
+        
+        tokens_per_sec = theoretical_tps * efficiency;
     }
     // =========================================================================
     // CPU_ONLY: All weights in system RAM
+    // Near theoretical bandwidth (no GPU kernel overhead)
+    // CPU SIMD operations are efficient for sequential reads
     // =========================================================================
     else if (gpu_layers == 0) {
         double ram_bw = hw.ram_bandwidth_gbs;
-        if (ram_bw <= 0) ram_bw = 25.0;  // DDR4-3200 estimate
+        if (ram_bw <= 0) ram_bw = 40.0;  // DDR5-5600 estimate
         
-        tokens_per_sec = (ram_bw * 1e9) / total_bytes_per_token;
+        // Theoretical: bandwidth / bytes_per_token
+        double theoretical_tps = (ram_bw * 1e9) / total_bytes_per_token;
+        
+        // Efficiency: 80% for CPU-only (near theoretical, minimal overhead)
+        double efficiency = 0.80;
+        
+        tokens_per_sec = theoretical_tps * efficiency;
     }
     // =========================================================================
-    // GPU_CPU_SPLIT: Sequential dependency model
+    // GPU_CPU_SPLIT: Sequential dependency model — FIXED
     // From spec: "Sequential dependency — slower side dominates total time."
+    //
+    // Key insight: CPU layers operate near theoretical bandwidth (no GPU overhead)
+    // GPU layers have the 27% efficiency penalty
+    // The total time is sum of GPU time + CPU time
     // =========================================================================
     else {
         double gpu_fraction = static_cast<double>(gpu_layers) / model.layers;
@@ -92,16 +107,20 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         double bytes_gpu = gpu_fraction * weight_bytes_per_token;
         double bytes_cpu = cpu_fraction * weight_bytes_per_token;
         
-        // Time per token for each part
-        double time_gpu_sec = (gpu_bw > 0) ? (bytes_gpu / (gpu_bw * 1e9)) : 1e6;
-        double time_cpu_sec = bytes_cpu / (ram_bw * 1e9);
+        // GPU time: includes efficiency penalty (memory-bandwidth-bound)
+        double gpu_efficiency = 0.27;
+        double time_gpu_sec = (gpu_bw > 0) ? (bytes_gpu / (gpu_bw * 1e9 * gpu_efficiency)) : 1e6;
         
-        // KV cache reads (split proportionally)
+        // CPU time: near theoretical bandwidth (no GPU overhead)
+        double cpu_efficiency = 0.80;
+        double time_cpu_sec = bytes_cpu / (ram_bw * 1e9 * cpu_efficiency);
+        
+        // KV cache reads (split proportionally, same efficiency as weights)
         if (kv_bytes_per_token > 0) {
             double kv_gpu = gpu_fraction * kv_bytes_per_token;
             double kv_cpu = cpu_fraction * kv_bytes_per_token;
-            time_gpu_sec += (gpu_bw > 0) ? (kv_gpu / (gpu_bw * 1e9)) : 1e6;
-            time_cpu_sec += kv_cpu / (ram_bw * 1e9);
+            time_gpu_sec += (gpu_bw > 0) ? (kv_gpu / (gpu_bw * 1e9 * gpu_efficiency)) : 1e6;
+            time_cpu_sec += kv_cpu / (ram_bw * 1e9 * cpu_efficiency);
         }
         
         // Total time is sum (sequential, not parallel)
@@ -112,33 +131,17 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         }
     }
     
-    // Apply efficiency factor (real-world is ~20-30% of theoretical)
-    // This accounts for:
-    // - KV cache reads (not just weights)
-    // - Attention computation overhead
-    // - Memory access patterns
-    // - CUDA kernel launch overhead
-    // Calibrated against RTX 5060 + Llama-3.2-3B: 61.3 t/s actual vs 230 t/s theoretical = 26.6%
-    double efficiency = 0.27;  // Calibrated estimate
-    
-    // Adjust efficiency based on model size relative to VRAM
-    // Larger models that barely fit have worse cache behavior
-    if (gpu_layers > 0 && hw.vram_total_bytes > 0) {
-        double weight_bytes = static_cast<double>(predict_weight_memory(model));
-        double model_fit_ratio = weight_bytes / hw.vram_total_bytes;
-        if (model_fit_ratio > 0.8) {
-            efficiency *= 0.8;  // Penalize models that barely fit
-        }
-    }
-    
-    return tokens_per_sec * efficiency;
+    return tokens_per_sec;
 }
 
 // =============================================================================
-// Prompt Evaluation Speed (Compute-bound) - Phase E
+// Prompt Evaluation Speed (Compute-bound) — FIXED: Efficiency reduced
 // =============================================================================
 // From spec: "Prefill is compute-bound (whole prompt processed in parallel),
 //            not bandwidth-bound."
+//
+// Phase H finding: Predicted 933 t/s vs actual 730.6 t/s (28% over)
+// Fix: Reduce GPU efficiency from 0.3 to 0.23
 // =============================================================================
 
 double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model, uint32_t gpu_layers) {
@@ -155,9 +158,8 @@ double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model,
     
     if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
         // GPU-accelerated: use GPU TFLOPS with efficiency factor
-        // From spec: "Typical values: 0.2-0.6 of peak"
-        // Small batch (batch=1) + small model: use lower end (0.3)
-        double gpu_efficiency = 0.3;  // Conservative for batch=1
+        // Phase H calibration: 0.3 was too optimistic, use 0.23
+        double gpu_efficiency = 0.23;  // Calibrated against 730.6 t/s actual
         
         // Scale by fraction of layers on GPU
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
@@ -166,13 +168,11 @@ double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model,
         // Add CPU contribution for remaining layers
         if (gpu_ratio < 1.0) {
             // CPU TFLOPS estimate: 0.8 TFLOPS for modern desktop CPU
-            // From spec: "AVX2 (most modern CPUs): ~0.5-1.5 TFLOPS FP16 equivalent"
             double cpu_tflops = 0.8;
             device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
         }
     } else {
         // CPU-only: use CPU TFLOPS estimate
-        // From spec: "Starting estimate for MVP: 0.8 TFLOPS"
         device_tflops = 0.8;
     }
     
@@ -185,49 +185,72 @@ double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model,
 }
 
 // =============================================================================
-// Time to First Token (TTFT) - Phase E
+// Time to First Token (TTFT) — FIXED: Hybrid model
 // =============================================================================
-// From spec: "TTFT is harder to predict than tokens/sec" - report with wider
-//            confidence band. Depends on prompt length, compute throughput,
-//            and batch scheduling heuristics in llama.cpp.
+// Phase H finding: Predicted 3,874 ms vs actual ~55 ms (70x off!)
+//
+// Root cause: Formula uses compute-bound model, but llama.cpp's "prompt eval time"
+// includes KV cache prefill (memory-bound) and batch processing optimizations.
+//
+// Fix: Use hybrid model:
+// - Short prompts (<512 tokens): memory-bandwidth-bound (like decode)
+// - Long prompts (>2K tokens): compute-bound
+// - Smooth transition between the two
 // =============================================================================
 
 double predict_ttft_ms(const HardwareSpec& hw, const ModelSpec& model, 
                        uint32_t prompt_tokens, uint32_t gpu_layers) {
     if (prompt_tokens == 0) return 0.0;
     
-    // Method 1: Direct formula from spec
-    // total_flops = flops_per_token × prompt_tokens
-    // ttft_seconds = total_flops / (device_compute_throughput × 1e12)
+    // Method 1: Memory-bandwidth-bound (like decode speed)
+    // For short prompts, the bottleneck is reading weights, not compute
+    double decode_tps = predict_decode_speed(hw, model, gpu_layers, 4096, 16);
+    double ttft_memory_ms = (decode_tps > 0) ? 
+        (static_cast<double>(prompt_tokens) / decode_tps * 1000.0) : 10000.0;
     
+    // Method 2: Compute-bound (original formula)
+    // For long prompts, the bottleneck is matrix multiplication
     double flops_per_token = 2.0 * static_cast<double>(model.param_count);
     double total_flops = flops_per_token * prompt_tokens;
     
-    // Device compute throughput in TFLOPS
     double device_tflops = 0.0;
-    
     if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
-        // GPU efficiency: 0.2-0.6, use 0.3 for small batch
-        double gpu_efficiency = 0.3;
+        double gpu_efficiency = 0.23;
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
         device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * gpu_efficiency;
-        
         if (gpu_ratio < 1.0) {
-            double cpu_tflops = 0.8;
-            device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
+            device_tflops += (1.0 - gpu_ratio) * 0.8;
         }
     } else {
-        // CPU-only: 0.8 TFLOPS
         device_tflops = 0.8;
     }
     
-    if (device_tflops <= 0) return 10000.0;  // 10s default
+    double ttft_compute_ms = (device_tflops > 0) ? 
+        (total_flops / (device_tflops * 1e12) * 1000.0) : 10000.0;
     
-    // TTFT in seconds
-    double ttft_seconds = total_flops / (device_tflops * 1e12);
+    // Hybrid: blend between memory-bound and compute-bound
+    // Short prompts: mostly memory-bound
+    // Long prompts: mostly compute-bound
+    // Transition happens around 512-2048 tokens
     
-    // Convert to milliseconds
-    return ttft_seconds * 1000.0;
+    double alpha = 0.0;  // 0 = pure memory-bound, 1 = pure compute-bound
+    if (prompt_tokens <= 256) {
+        alpha = 0.0;  // Pure memory-bound for very short prompts
+    } else if (prompt_tokens >= 2048) {
+        alpha = 1.0;  // Pure compute-bound for long prompts
+    } else {
+        // Smooth transition: linear interpolation
+        alpha = static_cast<double>(prompt_tokens - 256) / (2048.0 - 256.0);
+    }
+    
+    double ttft_ms = (1.0 - alpha) * ttft_memory_ms + alpha * ttft_compute_ms;
+    
+    // Sanity bounds: TTFT should be at least prompt_tokens * 0.1ms (very fast)
+    // and at most 60 seconds (extremely slow)
+    ttft_ms = std::max(ttft_ms, static_cast<double>(prompt_tokens) * 0.1);
+    ttft_ms = std::min(ttft_ms, 60000.0);
+    
+    return ttft_ms;
 }
 
 // Get TTFT confidence bounds (for reporting)
