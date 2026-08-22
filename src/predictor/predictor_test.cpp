@@ -334,6 +334,33 @@ int main() {
     // Show bytes per token
     printf("\nBytes per token: %.2f GB\n", predict_bytes_per_token(llama_3b) / 1e9);
     printf("KV bytes per token: %.2f KB\n", predict_kv_bytes_per_token(llama_3b, 16) / 1024.0);
+    
+    // =========================================================================
+    // Test 9: TTFT Analysis (Phase E)
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("TTFT ANALYSIS (Phase E - Compute-bound)\n");
+    print_separator();
+    
+    printf("\nLlama-3.2-3B Q4_K_M TTFT by Prompt Length (Full GPU):\n");
+    printf("  %-15s  %-12s  %-12s  %-12s\n", "Prompt Tokens", "TTFT (ms)", "Lower Bound", "Upper Bound");
+    printf("  %-15s  %-12s  %-12s  %-12s\n", "---------------", "------------", "------------", "------------");
+    
+    uint32_t prompt_lengths[] = {32, 128, 512, 1024, 2048, 4096};
+    for (uint32_t pt : prompt_lengths) {
+        double ttft = predict_ttft_ms(hw, llama_3b, pt, 28);
+        double lower, upper;
+        predict_ttft_bounds(hw, llama_3b, pt, 28, lower, upper);
+        printf("  %-15u  %-12.1f  %-12.1f  %-12.1f\n", pt, ttft, lower, upper);
+    }
+    
+    printf("\nKey Formula:\n");
+    printf("  flops_per_token = 2 × params = %.1f TFLOPS\n", 
+           2.0 * llama_3b.param_count / 1e12);
+    printf("  GPU efficiency: 30%% (small batch, small model)\n");
+    printf("  CPU TFLOPS estimate: 0.8 TFLOPS\n");
+    printf("  TTFT confidence: ±40%% (wider than tokens/sec)\n");
 
     printf("\nImplemented modules:\n");
     printf("  memory_predictor.h/cpp  - Weight, KV cache, overhead\n");

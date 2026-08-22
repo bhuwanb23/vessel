@@ -135,59 +135,114 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
 }
 
 // =============================================================================
-// Prompt Evaluation Speed (Compute-bound)
+// Prompt Evaluation Speed (Compute-bound) - Phase E
+// =============================================================================
+// From spec: "Prefill is compute-bound (whole prompt processed in parallel),
+//            not bandwidth-bound."
 // =============================================================================
 
 double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model, uint32_t gpu_layers) {
     // Prompt evaluation (prefill) is compute-bound, not memory-bound
-    // Formula: tokens_per_sec ≈ (TFLOPS * 1e12) / (2 * params)
+    // Formula: tokens_per_sec ≈ device_compute_throughput / flops_per_token
     
     if (model.param_count == 0 || model.layers == 0) return 0.0;
     
-    // Compute-bound estimation
-    // Each token requires ~2 * params FLOPs (forward pass)
-    double total_flops = 2.0 * static_cast<double>(model.param_count);
+    // FLOPS per token = 2 × active_params (multiply-accumulate)
+    double flops_per_token = 2.0 * static_cast<double>(model.param_count);
     
-    double tflops = 0.0;
+    // Device compute throughput in TFLOPS
+    double device_tflops = 0.0;
     
     if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
-        // GPU-accelerated: use GPU TFLOPS
+        // GPU-accelerated: use GPU TFLOPS with efficiency factor
+        // From spec: "Typical values: 0.2-0.6 of peak"
+        // Small batch (batch=1) + small model: use lower end (0.3)
+        double gpu_efficiency = 0.3;  // Conservative for batch=1
+        
         // Scale by fraction of layers on GPU
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
-        tflops = hw.gpu_tflops_fp16 * gpu_ratio;
+        device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * gpu_efficiency;
         
         // Add CPU contribution for remaining layers
         if (gpu_ratio < 1.0) {
-            // Assume ~1 TFLOPS for CPU (rough estimate)
-            tflops += (1.0 - gpu_ratio) * 1.0;
+            // CPU TFLOPS estimate: 0.8 TFLOPS for modern desktop CPU
+            // From spec: "AVX2 (most modern CPUs): ~0.5-1.5 TFLOPS FP16 equivalent"
+            double cpu_tflops = 0.8;
+            device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
         }
     } else {
-        // CPU-only: assume ~1-2 TFLOPS for modern CPU
-        tflops = 1.5;
+        // CPU-only: use CPU TFLOPS estimate
+        // From spec: "Starting estimate for MVP: 0.8 TFLOPS"
+        device_tflops = 0.8;
     }
     
-    if (tflops <= 0) return 0.0;
+    if (device_tflops <= 0) return 0.0;
     
-    // tokens_per_sec = TFLOPS * 1e12 / FLOPS_per_token
-    double tps = (tflops * 1e12) / total_flops;
+    // tokens_per_sec = (device_tflops × 1e12) / flops_per_token
+    double tps = (device_tflops * 1e12) / flops_per_token;
     
-    // Apply efficiency factor for prompt processing (~70-85%)
-    double efficiency = 0.75;
-    return tps * efficiency;
+    return tps;
 }
 
 // =============================================================================
-// Time to First Token (TTFT)
+// Time to First Token (TTFT) - Phase E
+// =============================================================================
+// From spec: "TTFT is harder to predict than tokens/sec" - report with wider
+//            confidence band. Depends on prompt length, compute throughput,
+//            and batch scheduling heuristics in llama.cpp.
 // =============================================================================
 
 double predict_ttft_ms(const HardwareSpec& hw, const ModelSpec& model, 
                        uint32_t prompt_tokens, uint32_t gpu_layers) {
     if (prompt_tokens == 0) return 0.0;
     
-    // TTFT = prompt_tokens / prompt_eval_speed * 1000 (convert to ms)
-    double prompt_tps = predict_prompt_eval_speed(hw, model, gpu_layers);
-    if (prompt_tps <= 0) return 10000.0;  // 10s default if can't predict
+    // Method 1: Direct formula from spec
+    // total_flops = flops_per_token × prompt_tokens
+    // ttft_seconds = total_flops / (device_compute_throughput × 1e12)
     
-    double ttft_seconds = static_cast<double>(prompt_tokens) / prompt_tps;
+    double flops_per_token = 2.0 * static_cast<double>(model.param_count);
+    double total_flops = flops_per_token * prompt_tokens;
+    
+    // Device compute throughput in TFLOPS
+    double device_tflops = 0.0;
+    
+    if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
+        // GPU efficiency: 0.2-0.6, use 0.3 for small batch
+        double gpu_efficiency = 0.3;
+        double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
+        device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * gpu_efficiency;
+        
+        if (gpu_ratio < 1.0) {
+            double cpu_tflops = 0.8;
+            device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
+        }
+    } else {
+        // CPU-only: 0.8 TFLOPS
+        device_tflops = 0.8;
+    }
+    
+    if (device_tflops <= 0) return 10000.0;  // 10s default
+    
+    // TTFT in seconds
+    double ttft_seconds = total_flops / (device_tflops * 1e12);
+    
+    // Convert to milliseconds
     return ttft_seconds * 1000.0;
+}
+
+// Get TTFT confidence bounds (for reporting)
+// Returns {lower_bound_ms, upper_bound_ms}
+// TTFT has wider uncertainty than decode speed
+void predict_ttft_bounds(const HardwareSpec& hw, const ModelSpec& model,
+                         uint32_t prompt_tokens, uint32_t gpu_layers,
+                         double& lower_ms, double& upper_ms) {
+    // Center estimate
+    double center = predict_ttft_ms(hw, model, prompt_tokens, gpu_layers);
+    
+    // TTFT uncertainty: ±40% due to:
+    // - Compute throughput variability
+    // - Batch scheduling heuristics
+    // - Prompt processing optimizations
+    lower_ms = center * 0.6;  // Best case: 60% of center
+    upper_ms = center * 1.4;  // Worst case: 140% of center
 }

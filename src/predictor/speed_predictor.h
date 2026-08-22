@@ -19,9 +19,14 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
 double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model, uint32_t gpu_layers);
 
 // Predict time to first token (TTFT) in milliseconds
-// TTFT = prompt_tokens / prompt_eval_speed * 1000
+// Formula: total_flops / (device_compute_throughput × 1e12) × 1000
 double predict_ttft_ms(const HardwareSpec& hw, const ModelSpec& model, 
                        uint32_t prompt_tokens, uint32_t gpu_layers);
+
+// Get TTFT confidence bounds (±40% due to compute variability)
+void predict_ttft_bounds(const HardwareSpec& hw, const ModelSpec& model,
+                         uint32_t prompt_tokens, uint32_t gpu_layers,
+                         double& lower_ms, double& upper_ms);
 
 // Calculate bytes per token for decode (weights only)
 double predict_bytes_per_token(const ModelSpec& model);
