@@ -112,12 +112,14 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         }
     }
     
-    // Apply efficiency factor (real-world is ~60-80% of theoretical)
+    // Apply efficiency factor (real-world is ~15-25% of theoretical)
     // This accounts for:
+    // - KV cache reads (not just weights)
     // - Attention computation overhead
     // - Memory access patterns
     // - CUDA kernel launch overhead
-    double efficiency = 0.70;  // Calibrated estimate
+    // Calibrated against RTX 5060 + Llama-3.2-3B baseline: 43.4 t/s actual vs 266 t/s theoretical = 16.3%
+    double efficiency = 0.18;  // Calibrated estimate
     
     // Adjust efficiency based on model size relative to VRAM
     // Larger models that barely fit have worse cache behavior
