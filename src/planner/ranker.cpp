@@ -1,16 +1,17 @@
 #include "ranker.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 // =============================================================================
 // Priority Parsing
 // =============================================================================
 
 PriorityMode parse_priority(const std::string& str) {
-    if (str == "speed") return PriorityMode::SPEED;
+    if (str == "speed")   return PriorityMode::SPEED;
     if (str == "quality") return PriorityMode::QUALITY;
-    if (str == "safety") return PriorityMode::SAFETY;
-    return PriorityMode::SPEED;  // default
+    if (str == "safety")  return PriorityMode::SAFETY;
+    return PriorityMode::SPEED;
 }
 
 const char* get_priority_name(PriorityMode mode) {
@@ -25,100 +26,221 @@ const char* get_priority_name(PriorityMode mode) {
 // =============================================================================
 // Memory Headroom Calculation
 // =============================================================================
-// From spec: min(vram_free - vram_used, ram_free - ram_used) / max(vram_free, ram_free)
-// This is the percentage of the most constrained resource that remains free.
-// Higher = safer (more margin for background processes, thermal throttling, etc.)
+// min(vram_free - vram_used, ram_free - ram_used) / max(vram_free, ram_free)
 // =============================================================================
 
 double calculate_memory_headroom(const HardwareSpec& hw, const Prediction& pred) {
-    // Calculate free memory after loading model
     int64_t vram_remaining = static_cast<int64_t>(hw.vram_free_bytes)
                            - static_cast<int64_t>(pred.memory_vram_bytes);
     int64_t ram_remaining  = static_cast<int64_t>(hw.ram_free_bytes)
                            - static_cast<int64_t>(pred.memory_ram_bytes);
 
-    // Use the most constrained resource
     int64_t min_remaining = std::min(vram_remaining, ram_remaining);
 
-    // Normalize by the largest available resource
     uint64_t max_available = std::max(hw.vram_free_bytes, hw.ram_free_bytes);
     if (max_available == 0) return 0.0;
 
     double headroom = static_cast<double>(min_remaining)
                     / static_cast<double>(max_available);
 
-    // Clamp to [0, 1] — negative means doesn't fit
     return std::max(0.0, std::min(1.0, headroom));
 }
 
 // =============================================================================
-// Sort by Priority — Three Axes
+// Metric Extraction Helpers
 // =============================================================================
-// Non-viable strategies always go to the bottom, regardless of priority.
-// Within viable strategies, the sort order depends on the user's priority.
+// Each priority has a primary, secondary, and tertiary metric.
+// These functions extract the raw value for a given strategy.
+// =============================================================================
+
+// --- SPEED priority metrics ---
+static double speed_primary(const StrategyResult& r) {
+    return r.prediction.tokens_per_sec;       // higher is better
+}
+static double speed_secondary(const StrategyResult& r) {
+    return 1.0 / (r.prediction.ttft_ms + 1.0); // lower TTFT → higher score
+}
+static double speed_tertiary(const StrategyResult& r) {
+    return static_cast<double>(r.prediction.confidence);
+}
+
+// --- QUALITY priority metrics ---
+// Primary: quality proxy = bpw + kv_bonus
+//   (Higher bpw = less quantization loss. FP16 KV > Q8)
+static double quality_primary(const StrategyResult& r) {
+    double kv_bonus = (r.strategy.kv_quant_bits == 16) ? 1.0 :
+                      (r.strategy.kv_quant_bits == 8)  ? 0.5 : 0.0;
+    // We don't have bpw directly in StrategyResult, but we know all strategies
+    // use the same model, so bpw is constant. Use GPU layers as proxy instead.
+    return static_cast<double>(r.strategy.gpu_layers) + kv_bonus;
+}
+static double quality_secondary(const StrategyResult& r) {
+    return static_cast<double>(r.strategy.gpu_layers);  // more GPU = fewer artifacts
+}
+static double quality_tertiary(const StrategyResult& r) {
+    return static_cast<double>(r.strategy.context_length);
+}
+
+// --- SAFETY priority metrics ---
+static double safety_primary_val(const StrategyResult& r, const HardwareSpec& hw) {
+    return calculate_memory_headroom(hw, r.prediction);  // higher = safer
+}
+static double safety_secondary(const StrategyResult& r) {
+    return static_cast<double>(r.prediction.confidence);
+}
+static double safety_tertiary(const StrategyResult& r) {
+    return r.prediction.tokens_per_sec;  // among equally safe, prefer faster
+}
+
+// =============================================================================
+// Confidence Modifier
+// =============================================================================
+// HIGH → 1.0, MEDIUM → 0.9, LOW → 0.7
+// Slightly penalizes low-confidence predictions.
+// =============================================================================
+
+static double confidence_multiplier(PredictionConfidence conf) {
+    switch (conf) {
+        case PredictionConfidence::HIGH:   return 1.0;
+        case PredictionConfidence::MEDIUM: return 0.9;
+        case PredictionConfidence::LOW:    return 0.7;
+        default: return 0.8;
+    }
+}
+
+// =============================================================================
+// Normalize to [0, 1]
+// =============================================================================
+// If all values are the same (denominator = 0), return 0.5 for all.
+// =============================================================================
+
+static double normalize(double value, double min_val, double max_val) {
+    if (max_val - min_val < 1e-9) return 0.5;  // all same → middle
+    return (value - min_val) / (max_val - min_val);
+}
+
+// =============================================================================
+// Scoring Function (Phase B)
+// =============================================================================
+// score = (primary × 0.7 + secondary × 0.2 + tertiary × 0.1) × confidence_mult
+//
+// Non-viable strategies get score = -1.0 (always at bottom).
+// =============================================================================
+
+double calculate_score(const StrategyResult& result, const HardwareSpec& hw,
+                       PriorityMode priority,
+                       double min_primary, double max_primary,
+                       double min_secondary, double max_secondary,
+                       double min_tertiary, double max_tertiary) {
+    // Non-viable → always bottom
+    if (!result.prediction.viable) return -1.0;
+
+    double p, s, t;
+
+    switch (priority) {
+        case PriorityMode::SPEED:
+            p = speed_primary(result);
+            s = speed_secondary(result);
+            t = speed_tertiary(result);
+            break;
+
+        case PriorityMode::QUALITY:
+            p = quality_primary(result);
+            s = quality_secondary(result);
+            t = quality_tertiary(result);
+            break;
+
+        case PriorityMode::SAFETY:
+            p = safety_primary_val(result, hw);
+            s = safety_secondary(result);
+            t = safety_tertiary(result);
+            break;
+
+        default:
+            p = speed_primary(result);
+            s = speed_secondary(result);
+            t = speed_tertiary(result);
+            break;
+    }
+
+    // Normalize each metric to [0, 1]
+    double np = normalize(p, min_primary, max_primary);
+    double ns = normalize(s, min_secondary, max_secondary);
+    double nt = normalize(t, min_tertiary, max_tertiary);
+
+    // Weighted combination: 70% primary, 20% secondary, 10% tertiary
+    double raw_score = np * 0.7 + ns * 0.2 + nt * 0.1;
+
+    // Apply confidence modifier
+    double conf_mult = confidence_multiplier(result.prediction.confidence);
+
+    return raw_score * conf_mult;
+}
+
+// =============================================================================
+// Sort by Priority — Scoring Function Approach
+// =============================================================================
+// Two-pass algorithm:
+//   Pass 1: Find min/max for each metric across all viable strategies
+//   Pass 2: Calculate scores and sort by score descending
 // =============================================================================
 
 void sort_by_priority(std::vector<StrategyResult>& results, PriorityMode priority,
                       const HardwareSpec& hw) {
-    std::sort(results.begin(), results.end(),
-        [priority, &hw](const StrategyResult& a, const StrategyResult& b) {
-            // Non-viable always go to bottom
-            if (a.prediction.viable != b.prediction.viable) {
-                return a.prediction.viable > b.prediction.viable;
-            }
+    if (results.empty()) return;
 
-            switch (priority) {
+    // =========================================================================
+    // Pass 1: Find min/max for normalization (viable strategies only)
+    // =========================================================================
+    double min_p = std::numeric_limits<double>::max();
+    double max_p = std::numeric_limits<double>::lowest();
+    double min_s = std::numeric_limits<double>::max();
+    double max_s = std::numeric_limits<double>::lowest();
+    double min_t = std::numeric_limits<double>::max();
+    double max_t = std::numeric_limits<double>::lowest();
 
-            // =================================================================
-            // SPEED — Interactive chat, real-time generation, coding assistants
-            // Primary:   tokens/sec descending (higher is better)
-            // Secondary: TTFT ascending      (lower is better, breaks ties)
-            // Tertiary:  confidence descending (prefer high-confidence when
-            //            speeds are close)
-            // =================================================================
+    for (const auto& r : results) {
+        if (!r.prediction.viable) continue;
+
+        double p, s, t;
+        switch (priority) {
             case PriorityMode::SPEED:
-                if (a.prediction.tokens_per_sec != b.prediction.tokens_per_sec)
-                    return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
-                if (a.prediction.ttft_ms != b.prediction.ttft_ms)
-                    return a.prediction.ttft_ms < b.prediction.ttft_ms;
-                return static_cast<int>(a.prediction.confidence)
-                     > static_cast<int>(b.prediction.confidence);
-
-            // =================================================================
-            // QUALITY — Creative writing, research, accuracy-critical tasks
-            // Primary:   KV cache precision descending (FP16 > Q8)
-            // Secondary: GPU layers descending (more GPU = fewer CPU artifacts)
-            // Tertiary:  context length descending (larger context = more flexibility)
-            // Quaternary: speed (tiebreak)
-            // =================================================================
+                p = speed_primary(r);
+                s = speed_secondary(r);
+                t = speed_tertiary(r);
+                break;
             case PriorityMode::QUALITY:
-                if (a.strategy.kv_quant_bits != b.strategy.kv_quant_bits)
-                    return a.strategy.kv_quant_bits > b.strategy.kv_quant_bits;
-                if (a.strategy.gpu_layers != b.strategy.gpu_layers)
-                    return a.strategy.gpu_layers > b.strategy.gpu_layers;
-                if (a.strategy.context_length != b.strategy.context_length)
-                    return a.strategy.context_length > b.strategy.context_length;
-                return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
-
-            // =================================================================
-            // SAFETY — Production deployments, long-running sessions, laptops
-            // Primary:   memory headroom descending (more free memory = safer)
-            // Secondary: confidence descending (prefer strategies you're sure about)
-            // Tertiary:  tokens/sec descending (among equally safe, prefer faster)
-            // =================================================================
-            case PriorityMode::SAFETY: {
-                double headroom_a = calculate_memory_headroom(hw, a.prediction);
-                double headroom_b = calculate_memory_headroom(hw, b.prediction);
-                if (headroom_a != headroom_b)
-                    return headroom_a > headroom_b;
-                if (a.prediction.confidence != b.prediction.confidence)
-                    return static_cast<int>(a.prediction.confidence)
-                         > static_cast<int>(b.prediction.confidence);
-                return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
-            }
-
+                p = quality_primary(r);
+                s = quality_secondary(r);
+                t = quality_tertiary(r);
+                break;
+            case PriorityMode::SAFETY:
+                p = safety_primary_val(r, hw);
+                s = safety_secondary(r);
+                t = safety_tertiary(r);
+                break;
             default:
-                return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
-            }
+                p = speed_primary(r);
+                s = speed_secondary(r);
+                t = speed_tertiary(r);
+                break;
+        }
+
+        min_p = std::min(min_p, p);  max_p = std::max(max_p, p);
+        min_s = std::min(min_s, s);  max_s = std::max(max_s, s);
+        min_t = std::min(min_t, t);  max_t = std::max(max_t, t);
+    }
+
+    // =========================================================================
+    // Pass 2: Sort by score descending
+    // =========================================================================
+    std::sort(results.begin(), results.end(),
+        [priority, &hw, min_p, max_p, min_s, max_s, min_t, max_t]
+        (const StrategyResult& a, const StrategyResult& b) {
+            double score_a = calculate_score(a, hw, priority,
+                                             min_p, max_p, min_s, max_s, min_t, max_t);
+            double score_b = calculate_score(b, hw, priority,
+                                             min_p, max_p, min_s, max_s, min_t, max_t);
+            return score_a > score_b;
         });
 }
