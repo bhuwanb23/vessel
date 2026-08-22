@@ -18,8 +18,8 @@ double predict_bytes_per_token(const ModelSpec& model) {
 double calculate_effective_bandwidth(const HardwareSpec& hw, uint32_t gpu_layers, uint32_t total_layers) {
     // Returns the effective bandwidth in GB/s based on placement
     if (gpu_layers == 0) {
-        // CPU only
-        return hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 25.0;
+        // CPU only - default to 40 GB/s (DDR5-5600 estimate for modern systems)
+        return hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 40.0;
     } else if (gpu_layers >= total_layers) {
         // Full GPU
         return hw.gpu_bandwidth_gbs;
@@ -86,7 +86,7 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         double cpu_fraction = 1.0 - gpu_fraction;
         
         double gpu_bw = hw.gpu_bandwidth_gbs > 0 ? hw.gpu_bandwidth_gbs : 0;
-        double ram_bw = hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 25.0;
+        double ram_bw = hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 40.0;
         
         // Weight bytes split by layer count
         double bytes_gpu = gpu_fraction * weight_bytes_per_token;
@@ -112,14 +112,14 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         }
     }
     
-    // Apply efficiency factor (real-world is ~15-25% of theoretical)
+    // Apply efficiency factor (real-world is ~20-30% of theoretical)
     // This accounts for:
     // - KV cache reads (not just weights)
     // - Attention computation overhead
     // - Memory access patterns
     // - CUDA kernel launch overhead
-    // Calibrated against RTX 5060 + Llama-3.2-3B baseline: 43.4 t/s actual vs 266 t/s theoretical = 16.3%
-    double efficiency = 0.18;  // Calibrated estimate
+    // Calibrated against RTX 5060 + Llama-3.2-3B: 61.3 t/s actual vs 230 t/s theoretical = 26.6%
+    double efficiency = 0.27;  // Calibrated estimate
     
     // Adjust efficiency based on model size relative to VRAM
     // Larger models that barely fit have worse cache behavior
