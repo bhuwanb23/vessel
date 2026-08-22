@@ -224,42 +224,7 @@ static llama_context_params make_context_params(const StrategyConfig& strategy) 
 }
 
 // =============================================================================
-// Batch Helpers
-// =============================================================================
-
-static llama_batch make_batch(int32_t n_tokens) {
-    llama_batch batch = {};
-    batch.n_tokens = n_tokens;
-    batch.token    = new llama_token[n_tokens];
-    batch.pos      = new llama_pos[n_tokens];
-    batch.n_seq_id = new int32_t[n_tokens];
-    batch.seq_id   = new llama_seq_id*[n_tokens];
-    batch.logits   = new int8_t[n_tokens];
-
-    for (int32_t i = 0; i < n_tokens; i++) {
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i]   = new llama_seq_id[1];
-        batch.seq_id[i][0] = 0;
-    }
-
-    return batch;
-}
-
-static void free_batch(llama_batch& batch) {
-    if (batch.n_tokens == 0) return;
-    delete[] batch.token;
-    delete[] batch.pos;
-    delete[] batch.n_seq_id;
-    for (int32_t i = 0; i < batch.n_tokens; i++) {
-        delete[] batch.seq_id[i];
-    }
-    delete[] batch.seq_id;
-    delete[] batch.logits;
-    batch = {};
-}
-
-// =============================================================================
-// Main Execute Function (D1-D5)
+// Main Execute Function (D1-D10)
 // =============================================================================
 
 ExecutionResult execute(const std::string& model_path,
@@ -340,21 +305,15 @@ ExecutionResult execute(const std::string& model_path,
     sampler.start();
 
     // =========================================================================
-    // Prefill (Prompt Processing)
+    // D6: Prefill (Prompt Processing)
     // =========================================================================
     auto t_prefill_start = std::chrono::high_resolution_clock::now();
 
-    llama_batch batch = make_batch(n_tokens);
-
-    for (int32_t i = 0; i < n_tokens; i++) {
-        batch.token[i]   = tokens[i];
-        batch.pos[i]     = i;
-        batch.logits[i]  = (i == n_tokens - 1) ? 1 : 0;  // only last needs logits
-    }
+    // Use llama_batch_get_one — the official API for single-sequence batches
+    llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
 
     if (llama_decode(ctx, batch) != 0) {
         result.error_message = "Failed to decode prompt (out of memory?)";
-        free_batch(batch);
         sampler.stop();
         llama_free(ctx);
         llama_model_free(model);
@@ -370,41 +329,25 @@ ExecutionResult execute(const std::string& model_path,
     printf("  Prefill: %.1f ms (%.1f tokens/sec)\n",
            result.prompt_eval_ms, result.prompt_eval_tokens_per_sec);
 
-    free_batch(batch);
-
     // =========================================================================
-    // Decode (Token Generation)
+    // D7: Decode Loop (Token Generation)
     // =========================================================================
     auto t_decode_start = std::chrono::high_resolution_clock::now();
+
+    // Create a greedy sampler chain
+    llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+    llama_sampler* smpl = llama_sampler_chain_init(sparams);
+    llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     std::vector<llama_token> generated;
     llama_token new_token;
 
-    // Get logits from the last position
-    float* logits = llama_get_logits_ith(ctx, -1);
-
-    // Greedy sampling (argmax) for MVP
-    // TODO: Use llama_sampler_chain for proper sampling in later phases
-    auto sample_greedy = [](const float* logits, int n_vocab) -> llama_token {
-        llama_token best = 0;
-        float best_score = logits[0];
-        for (int i = 1; i < n_vocab; i++) {
-            if (logits[i] > best_score) {
-                best_score = logits[i];
-                best = i;
-            }
-        }
-        return best;
-    };
-
-    int n_vocab = llama_vocab_n_tokens(vocab);
-
     for (int i = 0; i < max_tokens; i++) {
-        // Sample next token
-        new_token = sample_greedy(logits, n_vocab);
+        // Sample next token using the sampler chain
+        new_token = llama_sampler_sample(smpl, ctx, -1);
 
-        // Check for stop token
-        if (new_token == llama_vocab_eos(vocab)) {
+        // Check for end-of-generation
+        if (llama_vocab_is_eog(vocab, new_token)) {
             break;
         }
 
@@ -419,23 +362,14 @@ ExecutionResult execute(const std::string& model_path,
             progress(i + 1, tps);
         }
 
-        // Feed token back for next decode
-        llama_batch decode_batch = make_batch(1);
-        decode_batch.token[0]   = new_token;
-        decode_batch.pos[0]     = n_tokens + i;
-        decode_batch.logits[0]  = 1;
+        // Feed the token back for next iteration
+        llama_batch decode_batch = llama_batch_get_one(&new_token, 1);
 
         if (llama_decode(ctx, decode_batch) != 0) {
             result.error_message = "Failed to decode token at step "
                 + std::to_string(i) + " (out of memory?)";
-            free_batch(decode_batch);
             break;
         }
-
-        free_batch(decode_batch);
-
-        // Get logits for next iteration
-        logits = llama_get_logits_ith(ctx, -1);
     }
 
     auto t_decode_end = std::chrono::high_resolution_clock::now();
@@ -458,7 +392,7 @@ ExecutionResult execute(const std::string& model_path,
            result.tokens_generated, result.decode_ms, result.decode_tokens_per_sec);
 
     // =========================================================================
-    // D5: Stop Hardware Sampler & Collect Results
+    // D8: Stop Hardware Sampler & Collect Results
     // =========================================================================
     sampler.stop();
 
@@ -469,8 +403,9 @@ ExecutionResult execute(const std::string& model_path,
     result.throttled = sampler.was_throttled();
 
     // =========================================================================
-    // Cleanup
+    // D9: Cleanup
     // =========================================================================
+    llama_sampler_free(smpl);
     llama_free(ctx);
     llama_model_free(model);
 
@@ -479,6 +414,9 @@ ExecutionResult execute(const std::string& model_path,
         t_end - t_start).count();
     printf("  Total: %.1f ms\n", total_ms);
 
+    // =========================================================================
+    // D10: Return ExecutionResult
+    // =========================================================================
     result.success = true;
     return result;
 }
