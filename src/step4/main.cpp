@@ -208,9 +208,10 @@ int main(int argc, char* argv[]) {
         strat.batch_size = 1;
         strat.kv_quant_bits = 16;
         
-        auto ctx_lengths = get_context_lengths(model.context_length);
+        // Test with 4K and max context
+        uint32_t contexts[] = {4096, model.context_length};
         
-        for (uint32_t ctx : ctx_lengths) {
+        for (uint32_t ctx : contexts) {
             strat.context_length = ctx;
             strat.placement = (gpu_layers_override >= model.layers) ? 
                               PlacementStrategy::FULL_GPU : PlacementStrategy::GPU_CPU_SPLIT;

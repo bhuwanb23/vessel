@@ -1,150 +1,230 @@
 #include "matrix.h"
 #include "../predictor/predictor.h"
+#include "../predictor/memory_predictor.h"
+#include "../predictor/context_analyzer.h"
 #include <algorithm>
 #include <sstream>
+#include <set>
 
 // =============================================================================
-// Method Matrix Generator
+// Method Matrix Generator (Phase B)
+// =============================================================================
+// Three dimensions:
+//   1. Placement: FULL_GPU, GPU_CPU_SPLIT (max-fit, half, minimal), CPU_ONLY
+//   2. Context Length: 4K, max-safe
+//   3. KV Cache Precision: FP16 (16 bits), Q8 (8 bits)
 // =============================================================================
 
-std::vector<uint32_t> get_context_lengths(uint32_t model_max_context) {
-    std::vector<uint32_t> lengths;
+// Calculate maximum layers that fit in VRAM
+static uint32_t calculate_max_fit_layers(const HardwareSpec& hw, const ModelSpec& model, uint32_t context_length) {
+    if (model.layers == 0) return 0;
     
-    // Common context lengths to test
-    uint32_t candidates[] = {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072};
+    // Calculate per-layer memory
+    uint64_t weight_bytes = predict_weight_memory(model);
+    uint64_t kv_bytes = predict_kv_cache_memory(model, context_length, 16, 1);  // FP16 KV
     
-    for (uint32_t len : candidates) {
-        if (len <= model_max_context) {
-            lengths.push_back(len);
+    double per_layer_weight = static_cast<double>(weight_bytes) / model.layers;
+    double per_layer_kv = static_cast<double>(kv_bytes) / model.layers;
+    double per_layer_total = per_layer_weight + per_layer_kv;
+    
+    if (per_layer_total <= 0) return 0;
+    
+    // Available VRAM for layers (after overhead)
+    uint64_t gpu_overhead = 512ULL * 1024 * 1024;  // 512 MB CUDA context
+    if (hw.vram_free_bytes <= gpu_overhead) return 0;
+    
+    double available_for_layers = static_cast<double>(hw.vram_free_bytes - gpu_overhead);
+    
+    // Calculate max layers
+    uint32_t max_layers = static_cast<uint32_t>(available_for_layers / per_layer_total);
+    
+    // Clamp to model layers
+    if (max_layers > model.layers) max_layers = model.layers;
+    
+    return max_layers;
+}
+
+// Calculate max-safe context for a given memory budget
+static uint32_t calculate_max_safe_ctx(const HardwareSpec& hw, const ModelSpec& model, uint64_t memory_budget) {
+    uint64_t weight_bytes = predict_weight_memory(model);
+    uint64_t overhead_bytes = predict_overhead_memory(model, 1, true);
+    
+    // Available space for KV cache
+    int64_t available_for_kv = static_cast<int64_t>(memory_budget) - weight_bytes - overhead_bytes;
+    if (available_for_kv <= 0) return 0;
+    
+    // KV cache per token (FP16)
+    double kv_per_token = predict_kv_bytes_per_token(model, 16);
+    if (kv_per_token <= 0) return 0;
+    
+    // Max context
+    uint32_t max_ctx = static_cast<uint32_t>(available_for_kv / kv_per_token);
+    
+    // Clamp to model's max context
+    if (model.context_length > 0 && max_ctx > model.context_length) {
+        max_ctx = model.context_length;
+    }
+    
+    // Floor at 4096
+    if (max_ctx < 4096) max_ctx = 4096;
+    
+    return max_ctx;
+}
+
+// Deduplicate strategies (remove identical entries)
+static std::vector<StrategyResult> deduplicate(const std::vector<StrategyResult>& strategies) {
+    std::vector<StrategyResult> unique;
+    std::set<std::string> seen;
+    
+    for (const auto& strat : strategies) {
+        // Create unique key from strategy parameters
+        std::ostringstream oss;
+        oss << strat.strategy.gpu_layers << "_"
+            << strat.strategy.context_length << "_"
+            << strat.strategy.kv_quant_bits;
+        std::string key = oss.str();
+        
+        if (seen.find(key) == seen.end()) {
+            seen.insert(key);
+            unique.push_back(strat);
         }
     }
     
-    // Always include model max if not already included
-    if (lengths.empty() || lengths.back() != model_max_context) {
-        lengths.push_back(model_max_context);
-    }
-    
-    return lengths;
+    return unique;
 }
 
-std::vector<StrategyResult> generate_gpu_strategies(const HardwareSpec& hw, const ModelSpec& model) {
-    std::vector<StrategyResult> results;
-    
-    // Generate strategies for different context lengths (Full GPU)
-    auto ctx_lengths = get_context_lengths(model.context_length);
-    
-    for (uint32_t ctx : ctx_lengths) {
-        StrategyConfig strat;
-        strat.placement = PlacementStrategy::FULL_GPU;
-        strat.gpu_layers = model.layers;
-        strat.context_length = ctx;
-        strat.batch_size = 1;
-        strat.kv_quant_bits = 16;
-        
-        Prediction pred = predict(hw, model, strat);
-        
-        StrategyResult result;
-        result.strategy = strat;
-        result.prediction = pred;
-        result.description = "Full GPU";
-        
-        results.push_back(result);
-    }
-    
-    return results;
-}
-
-std::vector<StrategyResult> generate_split_strategies(const HardwareSpec& hw, const ModelSpec& model) {
-    std::vector<StrategyResult> results;
-    
-    // Generate strategies for different GPU layer counts
-    // Try: 75%, 50%, 25% of layers on GPU
-    uint32_t split_points[] = {
-        static_cast<uint32_t>(model.layers * 3 / 4),   // 75%
-        model.layers / 2,                                // 50%
-        model.layers / 4                                 // 25%
-    };
-    
-    auto ctx_lengths = get_context_lengths(model.context_length);
-    
-    for (uint32_t gpu_layers : split_points) {
-        if (gpu_layers == 0 || gpu_layers >= model.layers) continue;
-        
-        // Test with a few context lengths
-        for (uint32_t ctx : ctx_lengths) {
-            StrategyConfig strat;
-            strat.placement = PlacementStrategy::GPU_CPU_SPLIT;
-            strat.gpu_layers = gpu_layers;
-            strat.context_length = ctx;
-            strat.batch_size = 1;
-            strat.kv_quant_bits = 16;
-            
-            Prediction pred = predict(hw, model, strat);
-            
-            StrategyResult result;
-            result.strategy = strat;
-            result.prediction = pred;
-            
-            std::ostringstream oss;
-            oss << "Split " << gpu_layers << "/" << (model.layers - gpu_layers);
-            result.description = oss.str();
-            
-            results.push_back(result);
-        }
-    }
-    
-    return results;
-}
-
-std::vector<StrategyResult> generate_cpu_strategies(const HardwareSpec& hw, const ModelSpec& model) {
-    std::vector<StrategyResult> results;
-    
-    auto ctx_lengths = get_context_lengths(model.context_length);
-    
-    for (uint32_t ctx : ctx_lengths) {
-        StrategyConfig strat;
-        strat.placement = PlacementStrategy::CPU_ONLY;
-        strat.gpu_layers = 0;
-        strat.context_length = ctx;
-        strat.batch_size = 1;
-        strat.kv_quant_bits = 16;
-        
-        Prediction pred = predict(hw, model, strat);
-        
-        StrategyResult result;
-        result.strategy = strat;
-        result.prediction = pred;
-        result.description = "CPU Only";
-        
-        results.push_back(result);
-    }
-    
-    return results;
-}
+// =============================================================================
+// Main Matrix Generation
+// =============================================================================
 
 std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelSpec& model) {
-    std::vector<StrategyResult> all_results;
+    std::vector<StrategyResult> all_strategies;
     
-    // Generate all strategy types
-    auto gpu_strats = generate_gpu_strategies(hw, model);
-    auto split_strats = generate_split_strategies(hw, model);
-    auto cpu_strats = generate_cpu_strategies(hw, model);
+    // Calculate key values
+    uint64_t weight_bytes = predict_weight_memory(model);
     
-    // Combine all results
-    all_results.insert(all_results.end(), gpu_strats.begin(), gpu_strats.end());
-    all_results.insert(all_results.end(), split_strats.begin(), split_strats.end());
-    all_results.insert(all_results.end(), cpu_strats.begin(), cpu_strats.end());
+    // Calculate max-safe context for FULL_GPU (VRAM budget)
+    uint64_t vram_budget = hw.vram_free_bytes;
+    uint32_t max_safe_ctx_gpu = calculate_max_safe_ctx(hw, model, vram_budget);
     
-    // Sort by speed (fastest first)
-    std::sort(all_results.begin(), all_results.end(), 
+    // Calculate max-safe context for CPU_ONLY (RAM budget)
+    uint64_t ram_budget = hw.ram_free_bytes;
+    uint32_t max_safe_ctx_cpu = calculate_max_safe_ctx(hw, model, ram_budget);
+    
+    // Use the larger of the two for the matrix
+    uint32_t max_safe_ctx = std::max(max_safe_ctx_gpu, max_safe_ctx_cpu);
+    
+    // Context lengths to test: 4K and max-safe (deduplicate if same)
+    std::vector<uint32_t> contexts = {4096};
+    if (max_safe_ctx > 4096) {
+        contexts.push_back(max_safe_ctx);
+    }
+    
+    // KV cache precisions to test: FP16 (16 bits) and Q8 (8 bits)
+    std::vector<uint32_t> kv_quants = {16, 8};
+    
+    // Calculate split points
+    uint32_t max_gpu_layers = calculate_max_fit_layers(hw, model, max_safe_ctx);
+    
+    // Generate split points (deduplicate later)
+    std::vector<uint32_t> split_points;
+    
+    // 1. Full GPU (all layers)
+    split_points.push_back(model.layers);
+    
+    // 2. Max-fit split (maximum layers that fit in VRAM)
+    if (max_gpu_layers > 0 && max_gpu_layers < model.layers) {
+        split_points.push_back(max_gpu_layers);
+    }
+    
+    // 3. Half split
+    uint32_t half_layers = model.layers / 2;
+    if (half_layers > 0 && half_layers < model.layers) {
+        split_points.push_back(half_layers);
+    }
+    
+    // 4. Minimal GPU (1-4 layers)
+    uint32_t minimal_layers = std::min(4u, model.layers / 4);
+    if (minimal_layers > 0 && minimal_layers < model.layers) {
+        split_points.push_back(minimal_layers);
+    }
+    
+    // 5. CPU Only (0 layers)
+    split_points.push_back(0);
+    
+    // Sort and deduplicate split points
+    std::sort(split_points.begin(), split_points.end());
+    split_points.erase(std::unique(split_points.begin(), split_points.end()), split_points.end());
+    
+    // Generate all combinations
+    for (uint32_t gpu_layers : split_points) {
+        for (uint32_t ctx : contexts) {
+            for (uint32_t kv_bits : kv_quants) {
+                // Skip if context exceeds model max
+                if (ctx > model.context_length) continue;
+                
+                // Determine placement type
+                PlacementStrategy placement;
+                if (gpu_layers >= model.layers) {
+                    placement = PlacementStrategy::FULL_GPU;
+                } else if (gpu_layers == 0) {
+                    placement = PlacementStrategy::CPU_ONLY;
+                } else {
+                    placement = PlacementStrategy::GPU_CPU_SPLIT;
+                }
+                
+                // Create strategy config
+                StrategyConfig strat;
+                strat.placement = placement;
+                strat.gpu_layers = gpu_layers;
+                strat.context_length = ctx;
+                strat.batch_size = 1;
+                strat.kv_quant_bits = kv_bits;
+                
+                // Get prediction
+                Prediction pred = predict(hw, model, strat);
+                
+                // Create result
+                StrategyResult result;
+                result.strategy = strat;
+                result.prediction = pred;
+                
+                // Build description
+                std::ostringstream oss;
+                switch (placement) {
+                    case PlacementStrategy::FULL_GPU:
+                        oss << "Full GPU";
+                        break;
+                    case PlacementStrategy::GPU_CPU_SPLIT:
+                        oss << "Split " << gpu_layers << "/" << (model.layers - gpu_layers);
+                        break;
+                    case PlacementStrategy::CPU_ONLY:
+                        oss << "CPU Only";
+                        break;
+                }
+                oss << " (ctx=" << ctx;
+                if (kv_bits == 8) oss << ", KV=Q8";
+                oss << ")";
+                result.description = oss.str();
+                
+                all_strategies.push_back(result);
+            }
+        }
+    }
+    
+    // Deduplicate
+    all_strategies = deduplicate(all_strategies);
+    
+    // Sort by: viable first, then by speed (fastest first)
+    std::sort(all_strategies.begin(), all_strategies.end(),
         [](const StrategyResult& a, const StrategyResult& b) {
             if (a.prediction.viable != b.prediction.viable) {
-                return a.prediction.viable > b.prediction.viable;  // Viable first
+                return a.prediction.viable > b.prediction.viable;
             }
             return a.prediction.tokens_per_sec > b.prediction.tokens_per_sec;
         });
     
-    return all_results;
+    return all_strategies;
 }
 
 std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers) {
@@ -163,6 +243,9 @@ std::string format_strategy_description(const StrategyConfig& strat, uint32_t to
         default:
             oss << "Unknown";
     }
+    
+    oss << " ctx=" << strat.context_length;
+    if (strat.kv_quant_bits == 8) oss << " KV=Q8";
     
     return oss.str();
 }

@@ -4,22 +4,17 @@
 #include <vector>
 
 // =============================================================================
-// Method Matrix Generator
+// Method Matrix Generator (Phase B)
 // =============================================================================
 // Generates all viable deployment strategies for a given hardware + model combo.
-// This is what Step 4 adds that Steps 1-3 didn't have.
+// Three dimensions:
+//   1. Placement: FULL_GPU, GPU_CPU_SPLIT (max-fit, half, minimal), CPU_ONLY
+//   2. Context Length: 4K, max-safe
+//   3. KV Cache Precision: FP16 (16 bits), Q8 (8 bits)
 // =============================================================================
 
-// Generate all viable strategies
+// Generate all viable strategies (main entry point)
 std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelSpec& model);
-
-// Generate strategies for a specific placement type
-std::vector<StrategyResult> generate_gpu_strategies(const HardwareSpec& hw, const ModelSpec& model);
-std::vector<StrategyResult> generate_split_strategies(const HardwareSpec& hw, const ModelSpec& model);
-std::vector<StrategyResult> generate_cpu_strategies(const HardwareSpec& hw, const ModelSpec& model);
-
-// Get common context lengths to test
-std::vector<uint32_t> get_context_lengths(uint32_t model_max_context);
 
 // Format strategy for display
 std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers);
