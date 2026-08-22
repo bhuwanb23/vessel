@@ -3,33 +3,88 @@
 #include "../fetcher/gguf_parser.h"
 #include "../fetcher/config_fetcher.h"
 #include <algorithm>
+#include <cstdio>
 
 // =============================================================================
-// Metadata Fetcher (Step 2)
+// Metadata Fetcher (Step 2) — Error Handling (Phase F)
 // =============================================================================
+
+static std::string fetch_error_msg;
+static int fetch_http_status = 0;
+
+const std::string& get_fetch_error() {
+    return fetch_error_msg;
+}
+
+int get_fetch_http_status() {
+    return fetch_http_status;
+}
+
+void clear_fetch_error() {
+    fetch_error_msg.clear();
+    fetch_http_status = 0;
+}
 
 // Helper: Read file header (local files)
 static std::vector<uint8_t> read_file_header_local(const std::string& file_path, size_t bytes) {
     std::vector<uint8_t> header(bytes);
     FILE* f = fopen(file_path.c_str(), "rb");
-    if (!f) return {};
+    if (!f) {
+        fetch_error_msg = "Could not open file: " + file_path;
+        return {};
+    }
     size_t read = fread(header.data(), 1, bytes, f);
     fclose(f);
     header.resize(read);
     return header;
 }
 
+// Detect if URL looks like a HuggingFace repository (not a direct file URL)
+static bool looks_like_repo_url(const std::string& url) {
+    // HuggingFace repo URLs: https://huggingface.co/owner/repo
+    // Direct file URLs: https://huggingface.co/owner/repo/resolve/main/file.gguf
+    if (url.find("huggingface.co") != std::string::npos) {
+        // Count path segments after huggingface.co/
+        size_t base = url.find("huggingface.co/");
+        if (base != std::string::npos) {
+            std::string path = url.substr(base + 16);  // skip "huggingface.co/"
+            // If no /resolve/ in path, it's likely a repo root
+            if (path.find("/resolve/") == std::string::npos &&
+                path.find(".gguf") == std::string::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 ModelSpec fetch_metadata(const std::string& url_or_path) {
+    clear_fetch_error();
+    
     // Check if it's a local file
     bool is_local = (url_or_path.find(':') != std::string::npos && url_or_path.find("http") == std::string::npos) ||
-                    (url_or_path.size() > 0 && (url_or_path[0] == '/' || url_or_path[0] == '\\')) ||
-                    (url_or_path.find(".gguf") != std::string::npos && url_or_path.find("http") == std::string::npos);
+                    (url_or_path.size() > 0 && (url_or_path[0] == '/' || url_or_path[0] == '\\') && url_or_path.find(".gguf") != std::string::npos);
+    
+    // Also treat Windows paths (D:\...) as local
+    if (!is_local && url_or_path.size() >= 2 && url_or_path[1] == ':' && 
+        (url_or_path[0] >= 'A' && url_or_path[0] <= 'Z')) {
+        is_local = true;
+    }
     
     if (is_local) {
         return fetch_gguf_metadata(url_or_path);
     } else if (is_gguf_url(url_or_path)) {
         return fetch_gguf_metadata_from_url(url_or_path);
     } else {
+        // Not a GGUF URL — try config.json or suggest fix
+        if (looks_like_repo_url(url_or_path)) {
+            fprintf(stderr, "Info: URL appears to be a repository, not a GGUF file.\n");
+            fprintf(stderr, "  Trying config.json fallback...\n");
+        } else {
+            fprintf(stderr, "Warning: URL does not point to a .gguf file.\n");
+            fprintf(stderr, "  If this is a HuggingFace repo, append the specific GGUF filename.\n");
+            fprintf(stderr, "  Example: .../resolve/main/Model-Q4_K_M.gguf\n");
+        }
         return fetch_config_metadata(url_or_path);
     }
 }

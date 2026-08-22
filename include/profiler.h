@@ -25,3 +25,18 @@ double profile_gpu_bandwidth();
 // Profile disk only
 double profile_disk_sequential(const std::string& file_path);
 double profile_disk_random_4k(const std::string& file_path);
+
+// =============================================================================
+// Error Reporting (Phase F)
+// =============================================================================
+struct ProfileErrors {
+    bool ram_failed = false;
+    bool gpu_failed = false;
+    bool disk_slow = false;
+    double disk_seq_mbs = 0.0;
+    bool low_vram = false;
+    double vram_free_gb = 0.0;
+    std::string gpu_error_msg;
+};
+
+const ProfileErrors& get_profile_errors();

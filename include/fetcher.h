@@ -23,3 +23,9 @@ ModelSpec fetch_config_metadata(const std::string& repo_url);
 
 // Check if URL points to a GGUF file
 bool is_gguf_url(const std::string& url);
+
+// =============================================================================
+// Error Reporting (Phase F)
+// =============================================================================
+const std::string& get_fetch_error();
+int get_fetch_http_status();

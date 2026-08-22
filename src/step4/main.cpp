@@ -416,9 +416,15 @@ void print_prediction_table(const std::vector<StrategyResult>& results, const Ha
             }
         }
         
-        printf("💡 For long documents: Strategy #%d keeps everything on %s with %uK context\n",
+        const char* target = "GPU";
+        if (best_context->strategy.placement == PlacementStrategy::CPU_ONLY) {
+            target = "CPU";
+        } else if (best_context->strategy.placement == PlacementStrategy::GPU_CPU_SPLIT) {
+            target = "GPU+CPU";
+        }
+        printf("💡 For long documents: Strategy #%d uses %s with %uK context\n",
                ctx_row,
-               best_context->strategy.placement == PlacementStrategy::FULL_GPU ? "GPU" : "CPU",
+               target,
                best_context->strategy.context_length / 1024);
     }
     
@@ -468,6 +474,65 @@ std::vector<StrategyResult> filter_by_context(const std::vector<StrategyResult>&
 }
 
 // =============================================================================
+// Error Reporting Functions (Phase F)
+// =============================================================================
+
+void print_warnings(const HardwareSpec& hw) {
+    const ProfileErrors& pe = get_profile_errors();
+    
+    // Low VRAM warning
+    if (pe.low_vram) {
+        fprintf(stderr, "\n⚠️  Warning: Available VRAM is very low (%.1f GB).\n", pe.vram_free_gb);
+        fprintf(stderr, "   Consider closing other GPU applications to free up VRAM.\n");
+    }
+    
+    // Slow disk warning
+    if (pe.disk_slow) {
+        fprintf(stderr, "\n⚠️  Warning: Storage read speed is unusually low (%.0f MB/s sequential).\n", pe.disk_seq_mbs);
+        fprintf(stderr, "   This may affect model loading time.\n");
+        fprintf(stderr, "   For best results, ensure the model file is on a local NVMe SSD.\n");
+    }
+}
+
+void print_post_table_warnings(const std::vector<StrategyResult>& results, const HardwareSpec& hw) {
+    const ProfileErrors& pe = get_profile_errors();
+    
+    // Count viable strategies
+    int viable_count = 0;
+    int cpu_only_viable = 0;
+    int gpu_viable = 0;
+    
+    for (const auto& r : results) {
+        StrategyStatus st = determine_status(hw, r.prediction, r.strategy);
+        if (st == StrategyStatus::VIABLE || st == StrategyStatus::TIGHT) {
+            viable_count++;
+            if (r.strategy.placement == PlacementStrategy::CPU_ONLY) {
+                cpu_only_viable++;
+            } else {
+                gpu_viable++;
+            }
+        }
+    }
+    
+    // Case: No viable strategies at all
+    if (viable_count == 0) {
+        fprintf(stderr, "\n❌ This model does not fit on your hardware in any configuration.\n");
+        fprintf(stderr, "   Consider:\n");
+        fprintf(stderr, "   • A smaller quantization (e.g., Q3_K_M or Q2_K instead of %s)\n",
+                results.empty() ? "current" : results[0].strategy.kv_quant_bits == 16 ? "current" : "current");
+        fprintf(stderr, "   • A smaller model (e.g., 3B instead of 7B+)\n");
+        fprintf(stderr, "   • Closing other applications to free up memory\n");
+    }
+    // Case: Only CPU strategies viable
+    else if (gpu_viable == 0 && cpu_only_viable > 0) {
+        fprintf(stderr, "\n💡 Note: GPU offload is not possible for this model on your hardware.\n");
+        fprintf(stderr, "   The model will run on CPU only. For faster inference, consider:\n");
+        fprintf(stderr, "   • A smaller model that fits in VRAM\n");
+        fprintf(stderr, "   • A GPU with more VRAM\n");
+    }
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 
@@ -505,31 +570,94 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Step 1: Profile Hardware
-    Timer timer;
     printf("\n");
+    
+    // =========================================================================
+    // Step 1: Profile Hardware (with error handling)
+    // =========================================================================
     HardwareSpec hw = profile_hardware(model_path);
+    
+    // Critical failure: No GPU detected
+    const ProfileErrors& pe = get_profile_errors();
+    if (pe.gpu_failed && pe.ram_failed) {
+        fprintf(stderr, "\nError: Could not detect any hardware subsystems.\n");
+        fprintf(stderr, "Please check:\n");
+        fprintf(stderr, "  • NVIDIA driver is installed (run nvidia-smi to verify)\n");
+        fprintf(stderr, "  • CUDA Toolkit is installed\n");
+        fprintf(stderr, "  • System RAM is accessible\n");
+        return 1;
+    }
+    
     if (verbose) print_hardware_full(hw);
     else print_hardware_brief(hw);
     
-    // Step 2: Fetch Model Metadata
+    // Print hardware warnings
+    print_warnings(hw);
+    
+    // =========================================================================
+    // Step 2: Fetch Model Metadata (with error handling)
+    // =========================================================================
     ModelSpec model = fetch_metadata(model_path);
+    
     if (model.layers == 0) {
-        fprintf(stderr, "Error: Failed to fetch model metadata from: %s\n", model_path.c_str());
+        const std::string& fetch_err = get_fetch_error();
+        int http_status = get_fetch_http_status();
+        
+        fprintf(stderr, "\nError: Failed to fetch model metadata.\n");
+        if (http_status > 0) {
+            fprintf(stderr, "  HTTP Status: %d\n", http_status);
+        }
+        if (!fetch_err.empty()) {
+            fprintf(stderr, "  Details: %s\n", fetch_err.c_str());
+        }
+        fprintf(stderr, "  Source: %s\n", model_path.c_str());
+        
+        // Provide helpful suggestions
+        if (model_path.find("huggingface.co") != std::string::npos) {
+            if (model_path.find(".gguf") == std::string::npos) {
+                fprintf(stderr, "\nTip: URL does not point to a .gguf file.\n");
+                fprintf(stderr, "  Append the specific GGUF filename to the URL:\n");
+                fprintf(stderr, "  .../resolve/main/ModelName-Q4_K_M.gguf\n");
+            } else if (http_status == 404) {
+                fprintf(stderr, "\nTip: File not found. Check the URL for typos.\n");
+                fprintf(stderr, "  Verify the model exists at: https://huggingface.co/\n");
+            } else if (http_status == 403) {
+                fprintf(stderr, "\nTip: Access denied. The model may be gated.\n");
+                fprintf(stderr, "  Accept the model's license on HuggingFace first.\n");
+            }
+        }
+        
         return 1;
     }
+    
+    // Warn if using config.json fallback (lower confidence)
+    if (model.source == MetadataSource::CONFIG_JSON) {
+        fprintf(stderr, "\n⚠️  Using config.json fallback (no GGUF header available).\n");
+        fprintf(stderr, "   Predictions may be less accurate.\n");
+        fprintf(stderr, "   For best results, use a pre-quantized GGUF file.\n");
+    }
+    
     if (verbose) print_model_full(model);
     else print_model_brief(model);
     
+    // =========================================================================
     // Step 3: Generate Matrix
+    // =========================================================================
     std::vector<StrategyResult> results = generate_matrix(hw, model);
     results = filter_by_context(results, context_mode, model.context_length);
     
+    // =========================================================================
     // Step 4: Rank
+    // =========================================================================
     sort_by_priority(results, priority);
     
-    // Step 5: Print Table
+    // =========================================================================
+    // Step 5: Print Table (with warnings)
+    // =========================================================================
     print_prediction_table(results, hw, priority);
+    
+    // Print post-table warnings (non-viable, CPU-only, etc.)
+    print_post_table_warnings(results, hw);
     
     printf("\n=================================================\n");
     
