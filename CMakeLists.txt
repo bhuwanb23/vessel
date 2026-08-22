@@ -68,6 +68,18 @@ add_executable(test_http src/test_curl.cpp)
 target_link_libraries(test_http PRIVATE winhttp)
 
 # ============================================
+# Predictor Math (Step 3)
+# ============================================
+add_executable(predictor_test
+    src/predictor/predictor_test.cpp
+    src/predictor/predictor.cpp
+)
+
+target_include_directories(predictor_test PRIVATE
+    src/predictor
+)
+
+# ============================================
 # Installation
 # ============================================
-install(TARGETS planner metadata_fetcher test_http DESTINATION bin)
+install(TARGETS planner metadata_fetcher test_http predictor_test DESTINATION bin)
