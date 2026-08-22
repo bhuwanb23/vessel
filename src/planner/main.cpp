@@ -39,7 +39,8 @@ public:
 
 int main(int argc, char* argv[]) {
     // --- Parse CLI arguments ---
-    std::string model_path;
+    std::string model_url;       // URL or path from --model
+    std::string model_local;     // Local path from --model-path
     PriorityMode priority    = PriorityMode::SPEED;
     ContextMode ctx_mode     = ContextMode::BOTH;
     bool verbose             = false;
@@ -51,8 +52,10 @@ int main(int argc, char* argv[]) {
             print_usage();
             return 0;
         } else if (arg == "--model" && i + 1 < argc) {
-            model_path = argv[++i];
+            model_url = argv[++i];
             model_specified = true;
+        } else if (arg == "--model-path" && i + 1 < argc) {
+            model_local = argv[++i];
         } else if (arg == "--priority" && i + 1 < argc) {
             std::string val = argv[++i];
             if (!is_valid_priority(val)) {
@@ -66,7 +69,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg[0] != '-' && !model_specified) {
-            model_path = arg;
+            model_url = arg;
             model_specified = true;
         }
     }
@@ -74,6 +77,26 @@ int main(int argc, char* argv[]) {
     if (!model_specified) {
         fprintf(stderr, "Error: --model <url_or_path> is required\n\n");
         print_usage();
+        return 1;
+    }
+
+    // --- Resolve model path ---
+    std::string model_path = resolve_model_path(model_url, model_local);
+    if (model_path.empty()) {
+        fprintf(stderr, "\nError: Model file not found locally.\n");
+        if (!model_local.empty()) {
+            fprintf(stderr, "  Tried: %s\n", model_local.c_str());
+        } else {
+            // Extract filename from URL
+            std::string filename = model_url;
+            auto pos = model_url.find_last_of('/');
+            if (pos != std::string::npos) filename = model_url.substr(pos + 1);
+            fprintf(stderr, "  Expected: models/%s\n", filename.c_str());
+        }
+        fprintf(stderr, "\nDownload it first:\n");
+        fprintf(stderr, "  huggingface-cli download <repo> <filename> --local-dir models/\n");
+        fprintf(stderr, "\nOr specify the local path:\n");
+        fprintf(stderr, "  llm-planner --model <url> --model-path ./models/<file>.gguf\n");
         return 1;
     }
 

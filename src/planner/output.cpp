@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <fstream>
 
 // =============================================================================
 // Context Mode
@@ -428,17 +429,70 @@ void print_post_table_warnings(const std::vector<StrategyResult>& results,
 // Usage
 // =============================================================================
 
+// =============================================================================
+// File Path Resolution (Phase C)
+// =============================================================================
+
+static bool file_exists(const std::string& path) {
+    std::ifstream f(path);
+    return f.good();
+}
+
+std::string resolve_model_path(const std::string& url, const std::string& local_path) {
+    // 1. If --model-path provided, use it directly
+    if (!local_path.empty()) {
+        if (file_exists(local_path)) {
+            return local_path;
+        }
+        return "";
+    }
+
+    // 2. If --model is a local path (not a URL), use it
+    if (url.find("http://") == std::string::npos
+        && url.find("https://") == std::string::npos) {
+        if (file_exists(url)) {
+            return url;
+        }
+        return "";
+    }
+
+    // 3. URL provided — extract filename and check default directory
+    std::string filename = url;
+    auto pos = url.find_last_of('/');
+    if (pos != std::string::npos) {
+        filename = url.substr(pos + 1);
+    }
+
+    // Check common model directories
+    const char* dirs[] = {
+        "models/",
+        "../models/",
+        "./models/",
+        "C:/dev/models/",
+    };
+    for (const char* dir : dirs) {
+        std::string candidate = std::string(dir) + filename;
+        if (file_exists(candidate)) {
+            return candidate;
+        }
+    }
+
+    return "";
+}
+
 void print_usage() {
     printf("Usage: llm-planner --model <url_or_path> [options]\n\n");
     printf("Required:\n");
     printf("  --model <url_or_path>               Hugging Face GGUF URL or local file\n\n");
     printf("Options:\n");
+    printf("  --model-path <path>                 Local GGUF file (for --model URL)\n");
     printf("  --priority <speed|quality|safety>   Rank by (default: speed)\n");
     printf("  --context <4k|max|both>             Contexts to evaluate (default: both)\n");
     printf("  --verbose                           Full hardware & model reports\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
     printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
+    printf("  llm-planner --model <url> --model-path ./models/model.gguf\n");
     printf("  llm-planner --model <url> --priority safety\n");
     printf("  llm-planner --model <url> --context 4k --verbose\n");
 }

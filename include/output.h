@@ -63,3 +63,7 @@ void print_post_table_warnings(const std::vector<StrategyResult>& results,
 
 // Print usage help
 void print_usage();
+
+// Resolve model file path from URL and optional local path
+// Returns resolved path if file exists, empty string otherwise
+std::string resolve_model_path(const std::string& url, const std::string& local_path);

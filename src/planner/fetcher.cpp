@@ -61,13 +61,11 @@ static bool looks_like_repo_url(const std::string& url) {
 ModelSpec fetch_metadata(const std::string& url_or_path) {
     clear_fetch_error();
     
-    // Check if it's a local file
-    bool is_local = (url_or_path.find(':') != std::string::npos && url_or_path.find("http") == std::string::npos) ||
-                    (url_or_path.size() > 0 && (url_or_path[0] == '/' || url_or_path[0] == '\\') && url_or_path.find(".gguf") != std::string::npos);
-    
-    // Also treat Windows paths (D:\...) as local
-    if (!is_local && url_or_path.size() >= 2 && url_or_path[1] == ':' && 
-        (url_or_path[0] >= 'A' && url_or_path[0] <= 'Z')) {
+    // Check if it's a local file (not a URL)
+    bool is_local = false;
+    if (url_or_path.find("http://") == std::string::npos
+        && url_or_path.find("https://") == std::string::npos) {
+        // Not a URL — treat as local path
         is_local = true;
     }
     
