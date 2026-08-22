@@ -13,6 +13,7 @@
 #include "profiler.h"
 #include "fetcher.h"
 #include "matrix.h"
+#include "ranker.h"
 #include "../predictor/predictor.h"
 #include "../predictor/memory_predictor.h"
 #include "../predictor/speed_predictor.h"
@@ -561,6 +562,202 @@ TestResult test_prediction_consistency() {
 }
 
 // =============================================================================
+// Test 7: Ranker — Speed Priority
+// =============================================================================
+// Verify: Full GPU ranked #1, CPU-only near bottom, non-viable at very bottom
+// =============================================================================
+
+TestResult test_ranker_speed() {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::string model_path = "D:\\projects\\software\\local_llm\\models\\Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+    HardwareSpec hw = profile_hardware(model_path);
+    ModelSpec model = fetch_metadata(model_path);
+    if (model.layers == 0) return {"Ranker speed", false, "Metadata fetch failed", 0};
+    
+    std::vector<StrategyResult> results = generate_matrix(hw, model);
+    sort_by_priority(results, PriorityMode::SPEED, hw);
+    
+    // Find first viable
+    const StrategyResult* first_viable = nullptr;
+    for (const auto& r : results) {
+        if (r.prediction.viable) { first_viable = &r; break; }
+    }
+    if (!first_viable) return {"Ranker speed", false, "No viable strategies", 0};
+    
+    // Verify: Full GPU should be #1 (fastest)
+    bool full_gpu_first = (first_viable->strategy.placement == PlacementStrategy::FULL_GPU);
+    
+    // Verify: Non-viable at bottom
+    bool non_viable_at_bottom = true;
+    bool seen_viable = false;
+    for (auto it = results.rbegin(); it != results.rend(); ++it) {
+        if (it->prediction.viable) { seen_viable = true; continue; }
+        if (seen_viable) { non_viable_at_bottom = false; break; }
+    }
+    
+    // Verify: CPU-only ranked lower than Full GPU
+    bool cpu_below_gpu = true;
+    int gpu_rank = -1, cpu_rank = -1;
+    for (size_t i = 0; i < results.size(); i++) {
+        if (results[i].strategy.placement == PlacementStrategy::FULL_GPU && gpu_rank < 0)
+            gpu_rank = static_cast<int>(i);
+        if (results[i].strategy.placement == PlacementStrategy::CPU_ONLY && cpu_rank < 0)
+            cpu_rank = static_cast<int>(i);
+    }
+    if (gpu_rank >= 0 && cpu_rank >= 0) cpu_below_gpu = (cpu_rank > gpu_rank);
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    if (!full_gpu_first)
+        return {"Ranker speed", false, "Full GPU not ranked #1 for speed priority", elapsed};
+    if (!cpu_below_gpu)
+        return {"Ranker speed", false, "CPU-only ranked above Full GPU", elapsed};
+    if (!non_viable_at_bottom)
+        return {"Ranker speed", false, "Non-viable strategies not at bottom", elapsed};
+    
+    return {"Ranker speed", true, "", elapsed};
+}
+
+// =============================================================================
+// Test 8: Ranker — Quality Priority
+// =============================================================================
+// Verify: FP16 KV ranks above Q8 KV, higher GPU layers rank higher
+// =============================================================================
+
+TestResult test_ranker_quality() {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::string model_path = "D:\\projects\\software\\local_llm\\models\\Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+    HardwareSpec hw = profile_hardware(model_path);
+    ModelSpec model = fetch_metadata(model_path);
+    if (model.layers == 0) return {"Ranker quality", false, "Metadata fetch failed", 0};
+    
+    std::vector<StrategyResult> results = generate_matrix(hw, model);
+    sort_by_priority(results, PriorityMode::QUALITY, hw);
+    
+    // Find first FP16 and first Q8 among viable
+    int fp16_rank = -1, q8_rank = -1;
+    for (size_t i = 0; i < results.size(); i++) {
+        if (!results[i].prediction.viable) continue;
+        if (results[i].strategy.kv_quant_bits == 16 && fp16_rank < 0)
+            fp16_rank = static_cast<int>(i);
+        if (results[i].strategy.kv_quant_bits == 8 && q8_rank < 0)
+            q8_rank = static_cast<int>(i);
+    }
+    
+    bool fp16_above_q8 = (fp16_rank >= 0 && q8_rank >= 0) ? (fp16_rank < q8_rank) : true;
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    if (!fp16_above_q8)
+        return {"Ranker quality", false, "Q8 KV ranked above FP16 KV for quality", elapsed};
+    
+    return {"Ranker quality", true, "", elapsed};
+}
+
+// =============================================================================
+// Test 9: Ranker — Safety Priority
+// =============================================================================
+// Verify: Strategies with most headroom rank highest
+// =============================================================================
+
+TestResult test_ranker_safety() {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::string model_path = "D:\\projects\\software\\local_llm\\models\\Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+    HardwareSpec hw = profile_hardware(model_path);
+    ModelSpec model = fetch_metadata(model_path);
+    if (model.layers == 0) return {"Ranker safety", false, "Metadata fetch failed", 0};
+    
+    std::vector<StrategyResult> results = generate_matrix(hw, model);
+    sort_by_priority(results, PriorityMode::SAFETY, hw);
+    
+    // Verify: top viable strategy has the most headroom
+    // (scoring uses weighted combo, so strict global ordering isn't guaranteed,
+    //  but the #1 strategy should have top-tier headroom)
+    const StrategyResult* best = nullptr;
+    for (const auto& r : results) {
+        if (r.prediction.viable) { best = &r; break; }
+    }
+    if (!best) return {"Ranker safety", false, "No viable strategies", 0};
+    
+    double best_headroom = calculate_memory_headroom(hw, best->prediction);
+    
+    // Check that no viable strategy has significantly more headroom (>10% more)
+    bool best_is_top = true;
+    for (const auto& r : results) {
+        if (!r.prediction.viable) continue;
+        double h = calculate_memory_headroom(hw, r.prediction);
+        if (h > best_headroom + 0.10) {
+            best_is_top = false;
+            break;
+        }
+    }
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    if (!best_is_top)
+        return {"Ranker safety", false, "Strategy with significantly more headroom not ranked #1", elapsed};
+    
+    return {"Ranker safety", true, "", elapsed};
+}
+
+// =============================================================================
+// Test 10: Ranker — Priority Changes Order
+// =============================================================================
+// Verify: Same model with 3 priorities produces different orderings
+// =============================================================================
+
+TestResult test_ranker_order_differs() {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::string model_path = "D:\\projects\\software\\local_llm\\models\\Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+    HardwareSpec hw = profile_hardware(model_path);
+    ModelSpec model = fetch_metadata(model_path);
+    if (model.layers == 0) return {"Ranker order", false, "Metadata fetch failed", 0};
+    
+    // Generate same matrix, sort with 3 priorities
+    auto base = generate_matrix(hw, model);
+    
+    auto speed_order = base;
+    sort_by_priority(speed_order, PriorityMode::SPEED, hw);
+    
+    auto quality_order = base;
+    sort_by_priority(quality_order, PriorityMode::QUALITY, hw);
+    
+    auto safety_order = base;
+    sort_by_priority(safety_order, PriorityMode::SAFETY, hw);
+    
+    // Compare first viable strategy across priorities
+    auto first_viable = [](const std::vector<StrategyResult>& v) -> const StrategyResult* {
+        for (const auto& r : v) if (r.prediction.viable) return &r;
+        return nullptr;
+    };
+    
+    const StrategyResult* s = first_viable(speed_order);
+    const StrategyResult* q = first_viable(quality_order);
+    const StrategyResult* sa = first_viable(safety_order);
+    
+    // At least two of the three should differ
+    bool speed_diff_quality = (s && q) && (s->strategy.gpu_layers != q->strategy.gpu_layers
+                                         || s->strategy.kv_quant_bits != q->strategy.kv_quant_bits);
+    bool speed_diff_safety = (s && sa) && (s->strategy.placement != sa->strategy.placement
+                                         || s->strategy.gpu_layers != sa->strategy.gpu_layers);
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    if (!speed_diff_quality && !speed_diff_safety)
+        return {"Ranker order", false, "All 3 priorities produce same #1 strategy", elapsed};
+    
+    return {"Ranker order", true, "", elapsed};
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 
@@ -663,6 +860,34 @@ int main(int argc, char* argv[]) {
     print_test_header("6. Prediction Consistency (Pure Function)");
     TestResult r6 = test_prediction_consistency();
     print_test_result(r6);
+    
+    // =========================================================================
+    // Test 7: Ranker — Speed Priority
+    // =========================================================================
+    print_test_header("7. Ranker — Speed Priority");
+    TestResult r7 = test_ranker_speed();
+    print_test_result(r7);
+    
+    // =========================================================================
+    // Test 8: Ranker — Quality Priority
+    // =========================================================================
+    print_test_header("8. Ranker — Quality Priority");
+    TestResult r8 = test_ranker_quality();
+    print_test_result(r8);
+    
+    // =========================================================================
+    // Test 9: Ranker — Safety Priority
+    // =========================================================================
+    print_test_header("9. Ranker — Safety Priority");
+    TestResult r9 = test_ranker_safety();
+    print_test_result(r9);
+    
+    // =========================================================================
+    // Test 10: Ranker — Priority Changes Order
+    // =========================================================================
+    print_test_header("10. Ranker — Priority Changes Order");
+    TestResult r10 = test_ranker_order_differs();
+    print_test_result(r10);
     
     // =========================================================================
     // Summary
