@@ -232,103 +232,149 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
     }
 
     // =========================================================================
-    // Priority-Aware Recommendation
+    // Priority-Aware Recommendation (Phase D)
     // =========================================================================
     printf("\n--- Recommendation ---\n\n");
 
-    // Find best viable strategy for current priority
+    // --- Find key strategies ---
+    // best = first viable after sorting (best for current priority)
     const StrategyResult* best = nullptr;
-    for (const auto& r : results) {
-        StrategyStatus st = determine_status(hw, r.prediction, r.strategy);
-        if (st != StrategyStatus::VIABLE && st != StrategyStatus::TIGHT) continue;
-        if (!best) { best = &r; break; }  // First viable after sorting = best for this priority
-    }
-
-    // Find best for speed (always show)
+    // best_speed = highest tokens/sec among viable
     const StrategyResult* best_speed = nullptr;
+    // best_ctx = longest context among viable
+    const StrategyResult* best_ctx = nullptr;
+    // best_safe = most headroom among viable
+    const StrategyResult* best_safe = nullptr;
+    // second_best = second viable (for tradeoff comparison)
+    const StrategyResult* second_best = nullptr;
+
     for (const auto& r : results) {
         StrategyStatus st = determine_status(hw, r.prediction, r.strategy);
         if (st != StrategyStatus::VIABLE && st != StrategyStatus::TIGHT) continue;
+        if (!best) best = &r;
+        else if (!second_best) second_best = &r;
         if (!best_speed || r.prediction.tokens_per_sec > best_speed->prediction.tokens_per_sec)
             best_speed = &r;
-    }
-
-    // Find best for long context
-    const StrategyResult* best_ctx = nullptr;
-    for (const auto& r : results) {
-        StrategyStatus st = determine_status(hw, r.prediction, r.strategy);
-        if (st != StrategyStatus::VIABLE && st != StrategyStatus::TIGHT) continue;
         if (!best_ctx || r.strategy.context_length > best_ctx->strategy.context_length)
             best_ctx = &r;
-    }
-
-    // Find best for memory safety (most headroom)
-    const StrategyResult* best_safe = nullptr;
-    for (const auto& r : results) {
-        StrategyStatus st = determine_status(hw, r.prediction, r.strategy);
-        if (st != StrategyStatus::VIABLE && st != StrategyStatus::TIGHT) continue;
         double h = calculate_memory_headroom(hw, r.prediction);
         double bh = best_safe ? calculate_memory_headroom(hw, best_safe->prediction) : -1.0;
         if (!best_safe || h > bh) best_safe = &r;
     }
 
-    // Helper: find row number
-    auto find_row = [&](const StrategyResult* target) -> int {
+    // --- Helpers ---
+    auto find_row = [&](const StrategyResult* t) -> int {
         for (size_t i = 0; i < results.size(); i++)
-            if (&results[i] == target) return static_cast<int>(i) + 1;
+            if (&results[i] == t) return static_cast<int>(i) + 1;
         return 0;
     };
-
-    auto placement_str = [](const StrategyConfig& s) -> const char* {
-        return s.placement == PlacementStrategy::FULL_GPU    ? "Full GPU" :
-               s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "GPU+CPU" : "CPU";
+    auto pstr = [](const StrategyConfig& s) -> const char* {
+        return s.placement == PlacementStrategy::FULL_GPU     ? "Full GPU" :
+               s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "GPU+CPU"  : "CPU";
+    };
+    auto kvstr = [](uint32_t bits) -> const char* {
+        return bits == 16 ? "FP16" : "Q8";
     };
 
-    // Priority-specific primary recommendation
+    // =========================================================================
+    // Priority-Specific Primary Recommendation
+    // =========================================================================
     switch (priority) {
+
+        // --- SPEED ---
         case PriorityMode::SPEED:
-            if (best_speed)
-                printf("🏆 Best for speed: Strategy #%d (%s, %uK, %s) — ~%.0f tok/s\n",
-                       find_row(best_speed), placement_str(best_speed->strategy),
+            if (best_speed) {
+                printf("\U0001F3C6 Fastest option: Strategy #%d (%s, %uK, %s)"
+                       " at ~%.0f tok/s.\n",
+                       find_row(best_speed), pstr(best_speed->strategy),
                        best_speed->strategy.context_length / 1024,
-                       best_speed->strategy.kv_quant_bits == 16 ? "FP16" : "Q8",
+                       kvstr(best_speed->strategy.kv_quant_bits),
                        best_speed->prediction.tokens_per_sec);
+                // Long-context alternative
+                if (best_ctx && best_ctx != best_speed
+                    && best_ctx->strategy.context_length > 4096) {
+                    printf("   If you need longer context, Strategy #%d"
+                           " (%s, %uK, %s) stays on GPU at ~%.0f tok/s.\n",
+                           find_row(best_ctx), pstr(best_ctx->strategy),
+                           best_ctx->strategy.context_length / 1024,
+                           kvstr(best_ctx->strategy.kv_quant_bits),
+                           best_ctx->prediction.tokens_per_sec);
+                }
+            }
             break;
 
+        // --- QUALITY ---
         case PriorityMode::QUALITY:
-            if (best)
-                printf("🏆 Best for quality: Strategy #%d (%s, %uK, %s)\n"
-                       "   Higher KV precision and more GPU layers = fewer quantization artifacts.\n",
-                       find_row(best), placement_str(best->strategy),
+            if (best) {
+                printf("\U0001F3C6 Highest quality: Strategy #%d (%s, %uK, %s)"
+                       " — highest quantization level that fits on GPU.\n",
+                       find_row(best), pstr(best->strategy),
                        best->strategy.context_length / 1024,
-                       best->strategy.kv_quant_bits == 16 ? "FP16" : "Q8");
+                       kvstr(best->strategy.kv_quant_bits));
+                printf("   Note: quality ranking is based on quantization level,"
+                       " not measured perplexity.\n"
+                       "   No published benchmark data available for this model\u00D7quant.\n");
+            }
             break;
 
+        // --- SAFETY ---
         case PriorityMode::SAFETY:
             if (best_safe) {
                 double headroom = calculate_memory_headroom(hw, best_safe->prediction);
-                printf("🏆 Best for safety: Strategy #%d (%s, %uK, %s) — %.0f%% headroom\n",
-                       find_row(best_safe), placement_str(best_safe->strategy),
+                printf("\U0001F3C6 Safest option: Strategy #%d (%s, %uK, %s)"
+                       " — uses %.0f%% of available memory, leaving %.1f GB free.\n",
+                       find_row(best_safe), pstr(best_safe->strategy),
                        best_safe->strategy.context_length / 1024,
-                       best_safe->strategy.kv_quant_bits == 16 ? "FP16" : "Q8",
-                       headroom * 100.0);
+                       kvstr(best_safe->strategy.kv_quant_bits),
+                       (1.0 - headroom) * 100.0,
+                       headroom * hw.vram_free_bytes / 1e9);
+                // Compare with faster option
+                if (best_speed && best_speed != best_safe
+                    && best_speed->prediction.tokens_per_sec > 0) {
+                    double speedup = best_speed->prediction.tokens_per_sec
+                                   / best_safe->prediction.tokens_per_sec;
+                    printf("   Strategy #%d is %.0f\u00D7 faster but uses more memory.\n",
+                           find_row(best_speed), speedup);
+                }
             }
             break;
     }
 
-    // Always show speed option if different from primary
-    if (best_speed && best_speed != best)
-        printf("💡 For fastest generation: Strategy #%d — ~%.0f tok/s\n",
-               find_row(best_speed), best_speed->prediction.tokens_per_sec);
+    // =========================================================================
+    // Tradeoff Callout
+    // =========================================================================
+    // When top two strategies differ significantly on a secondary axis,
+    // mention it — this is the insight that makes the tool useful.
+    // =========================================================================
+    if (best && second_best && best != second_best) {
+        // Speed tradeoff: if best is much faster but has shorter context
+        if (priority != PriorityMode::SPEED
+            && best_speed && second_best
+            && best_speed->prediction.tokens_per_sec > 0
+            && second_best->prediction.tokens_per_sec > 0) {
+            double speedup = best_speed->prediction.tokens_per_sec
+                           / second_best->prediction.tokens_per_sec;
+            if (speedup > 2.0
+                && best_speed->strategy.context_length
+                   < second_best->strategy.context_length) {
+                printf("\u26A0\uFE0F  Tradeoff: Strategy #%d is %.0f\u00D7 faster than"
+                       " #%d but only fits at %uK context.\n"
+                       "   For documents >%uK tokens, Strategy #%d"
+                       " (%s, %uK) is your best option.\n",
+                       find_row(best_speed), speedup,
+                       find_row(second_best),
+                       best_speed->strategy.context_length / 1024,
+                       best_speed->strategy.context_length / 1024,
+                       find_row(second_best), pstr(second_best->strategy),
+                       second_best->strategy.context_length / 1024);
+            }
+        }
+    }
 
-    // Always show long-context option if different
-    if (best_ctx && best_ctx != best && best_ctx->strategy.context_length > 4096)
-        printf("💡 For long documents: Strategy #%d uses %s with %uK context\n",
-               find_row(best_ctx), placement_str(best_ctx->strategy),
-               best_ctx->strategy.context_length / 1024);
-
-    // Q8 KV tip
-    printf("💡 Q8 KV cache saves ~0.3GB VRAM at negligible quality cost.\n");
+    // =========================================================================
+    // Q8 KV Tip
+    // =========================================================================
+    printf("\U0001F4A1 Q8 KV cache saves ~0.3GB VRAM at negligible quality cost.\n");
 }
 
 // =============================================================================
@@ -364,11 +410,17 @@ void print_post_table_warnings(const std::vector<StrategyResult>& results,
 
     if (viable == 0) {
         fprintf(stderr, "\n❌ This model does not fit on your hardware in any configuration.\n");
-        fprintf(stderr, "   Consider: a smaller quantization, a smaller model,\n");
-        fprintf(stderr, "   or closing other applications to free memory.\n");
+        fprintf(stderr, "   Options:\n");
+        fprintf(stderr, "   \u2022 Try a smaller quantization (e.g., Q3_K_M or Q2_K)\n");
+        fprintf(stderr, "   \u2022 Try a smaller model (e.g., 3B instead of 7B+)\n");
+        fprintf(stderr, "   \u2022 Close GPU-intensive applications to free VRAM\n");
+        if (hw.vram_free_bytes > 0)
+            fprintf(stderr, "     (currently %.1f GB free)\n", hw.vram_free_bytes / 1e9);
     } else if (gpu == 0 && cpu_only > 0) {
         fprintf(stderr, "\n💡 GPU offload is not possible for this model on your hardware.\n");
-        fprintf(stderr, "   For faster inference, consider a smaller model or more VRAM.\n");
+        fprintf(stderr, "   The model will run on CPU only. For faster inference:\n");
+        fprintf(stderr, "   \u2022 A smaller model that fits in VRAM\n");
+        fprintf(stderr, "   \u2022 A GPU with more VRAM\n");
     }
 }
 
