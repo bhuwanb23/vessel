@@ -255,10 +255,13 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     // Determine confidence
     if (hw.gpu_bandwidth_gbs > 0 && model.param_count > 0 && model.bits_per_weight > 0) {
         pred.confidence = PredictionConfidence::HIGH;
-    } else if (model.param_count > 0) {
+    } else if (model.param_count > 0 && model.bits_per_weight > 0) {
         pred.confidence = PredictionConfidence::MEDIUM;
     } else {
         pred.confidence = PredictionConfidence::LOW;
+        if (model.bits_per_weight == 0) {
+            pred.warnings += "Unknown quantization type - using default bpw estimate. ";
+        }
     }
 
     // Add warnings
@@ -314,4 +317,16 @@ const char* get_confidence_name(PredictionConfidence confidence) {
         case PredictionConfidence::LOW: return "Low";
         default: return "Unknown";
     }
+}
+
+// =============================================================================
+// BPW Validation
+// =============================================================================
+
+double validate_bpw_from_file(uint64_t file_size_bytes, uint64_t param_count) {
+    if (file_size_bytes == 0 || param_count == 0) return 0.0;
+    
+    // Formula: bpw = (file_size_bytes * 8) / param_count
+    double bpw = (static_cast<double>(file_size_bytes) * 8.0) / static_cast<double>(param_count);
+    return bpw;
 }

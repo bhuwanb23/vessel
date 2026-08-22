@@ -112,7 +112,7 @@ int main() {
     llama_3b.head_dim         = 128;              // 3072 / 24
     llama_3b.ffn_dim          = 8192;
     llama_3b.context_length   = 131072;
-    llama_3b.bits_per_weight  = 4.5;              // Q4_K_M
+    llama_3b.bits_per_weight  = get_bits_per_weight("Q4_K_M");  // 4.85 bpw
 
     StrategyConfig strat_full_gpu;
     strat_full_gpu.placement      = PlacementStrategy::FULL_GPU;
@@ -181,6 +181,48 @@ int main() {
     print_separator();
     printf("PREDICTOR MODULE SUMMARY\n");
     print_separator();
+    // =========================================================================
+    // Test 5: BPW Validation
+    // =========================================================================
+    printf("\n");
+    print_separator();
+    printf("BITS-PER-WEIGHT VALIDATION\n");
+    print_separator();
+
+    // Llama-3.2-3B Q4_K_M file size: 1,888,356,224 bytes (from Step 0)
+    uint64_t file_size_llama = 1888356224ULL;
+    double measured_bpw = validate_bpw_from_file(file_size_llama, llama_3b.param_count);
+    double lookup_bpw = get_bits_per_weight("Q4_K_M");
+    
+    printf("\nLlama-3.2-3B Q4_K_M:\n");
+    printf("  File size:       %llu bytes\n", file_size_llama);
+    printf("  Param count:     %llu\n", llama_3b.param_count);
+    printf("  Measured bpw:    %.2f (from file_size * 8 / params)\n", measured_bpw);
+    printf("  Lookup bpw:      %.2f (from table)\n", lookup_bpw);
+    printf("  Error:           %.1f%%\n", std::abs(measured_bpw - lookup_bpw) / lookup_bpw * 100.0);
+    
+    if (std::abs(measured_bpw - lookup_bpw) / lookup_bpw < 0.1) {
+        printf("  Status:          PASS (<10%% error)\n");
+    } else {
+        printf("  Status:          NEEDS REVIEW\n");
+    }
+
+    // Print all lookup table values
+    printf("\n--- Complete BPW Lookup Table ---\n");
+    printf("Quant Type    bpw     Quant Type    bpw     Quant Type    bpw\n");
+    printf("------------  ------  ------------  ------  ------------  ------\n");
+    const char* quants[] = {
+        "F32", "F16", "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S",
+        "Q4_K_M", "Q4_K_S", "Q4_0", "Q4_1", "Q3_K_L", "Q3_K_M",
+        "Q3_K_S", "Q2_K", "IQ4_NL", "IQ3_XXS", "IQ2_XS", "IQ2_XXS"
+    };
+    for (int i = 0; i < 18; i += 3) {
+        printf("%-12s  %-6.2f  %-12s  %-6.2f  %-12s  %-6.2f\n",
+               quants[i], get_bits_per_weight(quants[i]),
+               (i+1 < 18) ? quants[i+1] : "", (i+1 < 18) ? get_bits_per_weight(quants[i+1]) : 0.0,
+               (i+2 < 18) ? quants[i+2] : "", (i+2 < 18) ? get_bits_per_weight(quants[i+2]) : 0.0);
+    }
+
     printf("\nImplemented functions:\n");
     printf("  - predict_weight_memory(): param_count * bits_per_weight / 8\n");
     printf("  - predict_kv_cache_memory(): 2 * layers * ctx * kv_heads * head_dim * bits / 8\n");
@@ -188,6 +230,7 @@ int main() {
     printf("  - predict_tokens_per_sec(): bandwidth / model_size * efficiency\n");
     printf("  - predict_ttft_ms(): prompt_tokens / prompt_speed * 1000\n");
     printf("  - predict(): main orchestrator\n");
+    printf("  - validate_bpw_from_file(): verify bpw from actual file size\n");
     printf("\nNext step: Calibrate efficiency factor against real llama.cpp numbers.\n");
 
     return 0;

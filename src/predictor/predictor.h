@@ -62,3 +62,8 @@ const char* get_placement_name(PlacementStrategy strategy);
 
 // Get confidence level name
 const char* get_confidence_name(PredictionConfidence confidence);
+
+// Validate bits_per_weight by comparing file size to parameter count
+// Returns: effective bpw calculated from actual file, or 0.0 if validation fails
+// This can be used to verify the lookup table values are accurate
+double validate_bpw_from_file(uint64_t file_size_bytes, uint64_t param_count);

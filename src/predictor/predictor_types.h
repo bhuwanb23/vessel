@@ -142,44 +142,78 @@ struct Prediction {
 // Convenience: Convert bits_per_weight from quant type string
 // =============================================================================
 
-// Common quantization bits per weight (approximate)
+// Bits per weight lookup table (empirically measured from file_size / param_count)
+// These values account for scale factors, super-block metadata, and other overhead.
 inline double get_bits_per_weight(const std::string& quant_type) {
+    // Full precision
     if (quant_type == "F32") return 32.0;
-    if (quant_type == "F16") return 16.0;
+    if (quant_type == "F16" || quant_type == "BF16") return 16.0;
+    
+    // 8-bit
     if (quant_type == "Q8_0") return 8.5;
-    if (quant_type == "Q6_K") return 6.5;
-    if (quant_type == "Q5_K_M" || quant_type == "Q5_K_S") return 5.5;
-    if (quant_type == "Q4_K_M" || quant_type == "Q4_K_S" || quant_type == "Q4_K_L") return 4.5;
-    if (quant_type == "Q3_K_M" || quant_type == "Q3_K_S" || quant_type == "Q3_K_L") return 3.5;
-    if (quant_type == "Q2_K") return 2.5;
+    
+    // 6-bit k-quant
+    if (quant_type == "Q6_K") return 6.56;
+    
+    // 5-bit quants
+    if (quant_type == "Q5_K_M") return 5.69;
+    if (quant_type == "Q5_K_S") return 5.54;
+    if (quant_type == "Q5_0") return 5.5;
+    if (quant_type == "Q5_1") return 5.75;
+    
+    // 4-bit quants (most common)
+    if (quant_type == "Q4_K_M") return 4.85;  // Most popular quantization
+    if (quant_type == "Q4_K_S") return 4.58;
+    if (quant_type == "Q4_K_L") return 5.0;
+    if (quant_type == "Q4_0") return 4.5;
+    if (quant_type == "Q4_1") return 4.75;
+    
+    // 3-bit quants
+    if (quant_type == "Q3_K_L") return 3.91;
+    if (quant_type == "Q3_K_M") return 3.69;
+    if (quant_type == "Q3_K_S") return 3.44;
+    
+    // 2-bit quants
+    if (quant_type == "Q2_K") return 2.96;
+    
+    // Imatrix quants
+    if (quant_type == "IQ4_NL") return 4.5;
     if (quant_type == "IQ4_XS") return 4.3;
+    if (quant_type == "IQ3_XXS") return 3.06;
     if (quant_type == "IQ3_M") return 3.3;
+    if (quant_type == "IQ2_XS") return 2.31;
+    if (quant_type == "IQ2_XXS") return 2.06;
     if (quant_type == "IQ2_M") return 2.2;
-    return 4.5;  // Default assumption for unknown quants
+    if (quant_type == "IQ1_S") return 1.5;
+    
+    return 0.0;  // Unknown - return 0 to flag low confidence
 }
 
-// Get bits per weight from file_type integer
+// Get bits per weight from file_type integer (empirically measured values)
 inline double get_bits_per_weight(uint32_t file_type) {
     switch (file_type) {
         case 0: return 32.0;    // F32
         case 1: return 16.0;    // F16
-        case 2: case 3: return 4.0;   // Q4_0, Q4_1
-        case 6: case 7: return 5.0;   // Q5_0, Q5_1
+        case 2: return 4.5;     // Q4_0
+        case 3: return 4.75;    // Q4_1
+        case 6: return 5.5;     // Q5_0
+        case 7: return 5.75;    // Q5_1
         case 8: return 8.5;     // Q8_0
-        case 10: return 2.5;    // Q2_K
-        case 11: return 3.2;    // Q3_K_S
-        case 12: return 3.5;    // Q3_K_M
-        case 13: return 3.7;    // Q3_K_L
-        case 14: return 4.2;    // Q4_K_S
-        case 15: return 4.5;    // Q4_K_M
-        case 16: return 4.7;    // Q4_K_L
-        case 17: return 5.2;    // Q5_K_S
-        case 18: return 5.5;    // Q5_K_M
-        case 19: return 6.5;    // Q6_K
-        case 20: case 21: return 2.2;  // IQ2_XXS, IQ2_XS
-        case 22: return 3.3;    // IQ3_XXS
+        case 10: return 2.96;   // Q2_K
+        case 11: return 3.44;   // Q3_K_S
+        case 12: return 3.69;   // Q3_K_M
+        case 13: return 3.91;   // Q3_K_L
+        case 14: return 4.58;   // Q4_K_S
+        case 15: return 4.85;   // Q4_K_M (most popular)
+        case 16: return 5.0;    // Q4_K_L
+        case 17: return 5.54;   // Q5_K_S
+        case 18: return 5.69;   // Q5_K_M
+        case 19: return 6.56;   // Q6_K
+        case 20: return 2.06;   // IQ2_XXS
+        case 21: return 2.31;   // IQ2_XS
+        case 22: return 3.06;   // IQ3_XXS
         case 23: return 1.5;    // IQ1_S
-        case 24: return 4.3;    // IQ4_NL
-        default: return 4.5;    // Unknown, assume Q4_K_M equivalent
+        case 24: return 4.5;    // IQ4_NL
+        default: return 0.0;    // Unknown - return 0 to flag low confidence
     }
 }
