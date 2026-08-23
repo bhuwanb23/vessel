@@ -80,6 +80,7 @@ set(PLANNER_SOURCES
     src/planner/executor.cpp
     src/planner/hardware_sampler.cpp
     src/planner/comparison_report.cpp
+    src/planner/hardware_fingerprint.cpp
 )
 
 set(SHARED_INCLUDE_DIRS

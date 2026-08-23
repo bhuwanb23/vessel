@@ -167,6 +167,8 @@ void print_hardware_full(const HardwareSpec& hw) {
         printf("NVMe:             %.0f MB/s seq, %.0f MB/s random 4K\n",
                hw.nvme_sequential_mbs, hw.nvme_random_4k_mbs);
     printf("Compute:          sm_%d%d\n", hw.gpu_compute_major, hw.gpu_compute_minor);
+    if (!hw.hardware_fingerprint.empty())
+        printf("Fingerprint:      %s\n", hw.hardware_fingerprint.c_str());
 }
 
 void print_model_full(const ModelSpec& model) {
