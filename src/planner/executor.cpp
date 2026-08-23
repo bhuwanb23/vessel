@@ -85,8 +85,11 @@ static llama_model_params make_model_params(const StrategyConfig& strategy,
     if (moe_overrides && moe_overrides->needed) {
         // Use tensor_split to control GPU/CPU weight distribution
         // This is the primary mechanism for MoE expert offloading
-        params.tensor_split[0] = moe_overrides->tensor_split[0];
-        params.tensor_split[1] = moe_overrides->tensor_split[1];
+        // NOTE: tensor_split is a const float* — must use static storage
+        static float moe_split[2] = {0.0f, 0.0f};
+        moe_split[0] = moe_overrides->tensor_split[0];
+        moe_split[1] = moe_overrides->tensor_split[1];
+        params.tensor_split = moe_split;
         
         printf("  MoE tensor split: %.1f%% GPU, %.1f%% CPU\n",
                moe_overrides->tensor_split[0] * 100.0f,
@@ -348,6 +351,209 @@ ExecutionResult execute(const std::string& model_path,
     // =========================================================================
     // D10: Return ExecutionResult
     // =========================================================================
+    result.success = true;
+    return result;
+}
+
+// =============================================================================
+// MoE-Aware Execute (Step 9, Phase C)
+// =============================================================================
+// Same as execute() but generates and applies MoE tensor overrides.
+// This enables expert-level GPU/CPU splitting for MoE models.
+// =============================================================================
+
+ExecutionResult execute_moe(const std::string& model_path,
+                            const StrategyConfig& strategy,
+                            const ModelSpec& model_metadata,
+                            const HardwareSpec& hw,
+                            const std::string& prompt,
+                            int max_tokens,
+                            InferProgressCallback progress) {
+    ExecutionResult result;
+    
+    // Generate MoE tensor overrides
+    MoETensorOverrides moe_overrides = generateMoETensorOverrides(model_metadata, strategy, hw);
+    
+    if (moe_overrides.needed) {
+        printf("  MoE Placement: %s\n", moe_overrides.summary.c_str());
+        printf("  GPU weights: %.2f GB, CPU weights: %.2f GB\n",
+               moe_overrides.gpu_weight_bytes / 1e9,
+               moe_overrides.cpu_weight_bytes / 1e9);
+    }
+    
+    auto t_start = std::chrono::high_resolution_clock::now();
+    
+    // =========================================================================
+    // D2: Load Model (with MoE overrides)
+    // =========================================================================
+    llama_model_params model_params = make_model_params(strategy, &moe_overrides);
+    
+    struct llama_model* model = llama_model_load_from_file(
+        model_path.c_str(), model_params);
+    
+    if (!model) {
+        result.error_message = "Failed to load MoE model from: " + model_path + "\n"
+            "  Possible causes:\n"
+            "  1. File does not exist or is corrupted\n"
+            "  2. Not enough VRAM/RAM for requested tensor split\n"
+            "  3. GGUF version mismatch with this llama.cpp build\n"
+            "  Try: reduce GPU expert count, close other GPU apps, "
+            "or use a smaller model.";
+        return result;
+    }
+    
+    // =========================================================================
+    // D3: Create Context
+    // =========================================================================
+    llama_context_params ctx_params = make_context_params(strategy);
+    
+    struct llama_context* ctx = llama_init_from_model(model, ctx_params);
+    
+    if (!ctx) {
+        result.error_message = "Failed to create MoE inference context\n"
+            "  Possible causes:\n"
+            "  1. Not enough VRAM/RAM for context length "
+            + std::to_string(strategy.context_length) + "\n"
+            "  2. GPU driver issue (try restarting the driver)\n"
+            "  Try: reduce --context or use fewer GPU experts.";
+        llama_model_free(model);
+        return result;
+    }
+    
+    // =========================================================================
+    // D4: Tokenize Prompt
+    // =========================================================================
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+    
+    std::vector<llama_token> tokens(prompt.size() + 32);
+    
+    int32_t n_tokens = llama_tokenize(
+        vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
+        tokens.data(), static_cast<int32_t>(tokens.size()),
+        true,   // add_special
+        true);  // parse_special
+    
+    if (n_tokens <= 0) {
+        result.error_message = "Failed to tokenize prompt for MoE model";
+        llama_free(ctx);
+        llama_model_free(model);
+        return result;
+    }
+    
+    tokens.resize(n_tokens);
+    printf("  Prompt: %d tokens\n", n_tokens);
+    
+    // =========================================================================
+    // D5: Start Live Hardware Sampler
+    // =========================================================================
+    HardwareSampler sampler;
+    sampler.start(0);
+    
+    // =========================================================================
+    // D6: Prefill (Prompt Processing)
+    // =========================================================================
+    auto t_prefill_start = std::chrono::high_resolution_clock::now();
+    
+    llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
+    
+    if (llama_decode(ctx, batch) != 0) {
+        result.error_message = "Failed to decode MoE prompt. Error: CUDA OOM or compute buffer too small.";
+        sampler.stop();
+        llama_free(ctx);
+        llama_model_free(model);
+        return result;
+    }
+    
+    auto t_prefill_end = std::chrono::high_resolution_clock::now();
+    result.prompt_eval_ms = std::chrono::duration<double, std::milli>(
+        t_prefill_end - t_prefill_start).count();
+    result.prompt_eval_tokens_per_sec = (result.prompt_eval_ms > 0) ?
+        (n_tokens * 1000.0 / result.prompt_eval_ms) : 0;
+    
+    printf("  Prefill: %.1f ms (%.1f tokens/sec)\n",
+           result.prompt_eval_ms, result.prompt_eval_tokens_per_sec);
+    
+    // =========================================================================
+    // D7: Decode Loop (Token Generation)
+    // =========================================================================
+    auto t_decode_start = std::chrono::high_resolution_clock::now();
+    
+    llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+    llama_sampler* smpl = llama_sampler_chain_init(sparams);
+    llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    
+    std::vector<llama_token> generated;
+    llama_token new_token;
+    
+    for (int i = 0; i < max_tokens; i++) {
+        if (is_abort_requested()) {
+            fprintf(stderr, "\n  [!] MoE generation aborted by user (Ctrl+C)\n");
+            break;
+        }
+        
+        new_token = llama_sampler_sample(smpl, ctx, -1);
+        
+        if (llama_vocab_is_eog(vocab, new_token)) {
+            break;
+        }
+        
+        generated.push_back(new_token);
+        
+        if (progress) {
+            auto t_now = std::chrono::high_resolution_clock::now();
+            double elapsed = std::chrono::duration<double, std::milli>(
+                t_now - t_decode_start).count();
+            double tps = (elapsed > 0) ? ((i + 1) * 1000.0 / elapsed) : 0;
+            progress(i + 1, tps);
+        }
+        
+        llama_batch decode_batch = llama_batch_get_one(&new_token, 1);
+        
+        if (llama_decode(ctx, decode_batch) != 0) {
+            result.error_message = "Failed to decode MoE token at step " + std::to_string(i);
+            break;
+        }
+    }
+    
+    auto t_decode_end = std::chrono::high_resolution_clock::now();
+    result.decode_ms = std::chrono::duration<double, std::milli>(
+        t_decode_end - t_decode_start).count();
+    result.tokens_generated = static_cast<int>(generated.size());
+    result.decode_tokens_per_sec = (result.decode_ms > 0) ?
+        (result.tokens_generated * 1000.0 / result.decode_ms) : 0;
+    
+    for (llama_token tok : generated) {
+        char buf[256];
+        int n = llama_token_to_piece(vocab, tok, buf, sizeof(buf), 0, true);
+        if (n > 0) result.generated_text.append(buf, n);
+    }
+    
+    printf("  Generated: %d tokens in %.1f ms (%.1f tokens/sec)\n",
+           result.tokens_generated, result.decode_ms, result.decode_tokens_per_sec);
+    
+    // =========================================================================
+    // D8: Stop Hardware Sampler & Collect Results
+    // =========================================================================
+    sampler.stop();
+    
+    HardwareMetrics hw_metrics = sampler.get_metrics();
+    result.peak_vram_used_bytes = hw_metrics.peak_vram_bytes;
+    result.peak_ram_used_bytes = hw_metrics.peak_ram_bytes;
+    result.peak_gpu_temp_c = hw_metrics.max_temp_celsius;
+    result.throttled = hw_metrics.throttled;
+    
+    // =========================================================================
+    // D9: Cleanup
+    // =========================================================================
+    llama_sampler_free(smpl);
+    llama_free(ctx);
+    llama_model_free(model);
+    
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(
+        t_end - t_start).count();
+    printf("  Total: %.1f ms\n", total_ms);
+    
     result.success = true;
     return result;
 }
