@@ -1,4 +1,5 @@
 #include "matrix.h"
+#include "moe_placer.h"
 #include "../predictor/predictor.h"
 #include "../predictor/memory_predictor.h"
 #include "../predictor/context_analyzer.h"

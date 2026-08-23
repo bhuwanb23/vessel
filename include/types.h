@@ -215,12 +215,44 @@ struct Prediction {
 };
 
 // =============================================================================
+// MoE Expert Placement Plan
+// =============================================================================
+struct MoEPlacementPlan {
+    bool viable = false;
+    std::string reason;              // Why not viable (if applicable)
+    
+    // Shared parameters (always in VRAM if viable)
+    uint64_t shared_vram_bytes = 0;  // Shared weights in VRAM
+    
+    // KV cache
+    uint64_t kv_vram_bytes = 0;      // KV cache in VRAM
+    uint64_t kv_ram_bytes = 0;       // KV cache in RAM (if split)
+    
+    // Routed experts
+    uint32_t gpu_experts_per_layer = 0;  // How many experts on GPU per layer
+    uint32_t cpu_experts_per_layer = 0;  // How many experts on CPU per layer
+    uint64_t gpu_expert_vram_bytes = 0;  // VRAM used by routed experts
+    uint64_t cpu_expert_ram_bytes = 0;   // RAM used by routed experts
+    
+    // Totals
+    uint64_t total_vram_bytes = 0;
+    uint64_t total_ram_bytes = 0;
+    
+    // Per-expert size (for display)
+    uint64_t bytes_per_expert = 0;
+    
+    // Strategy variant name
+    std::string variant_name;  // "MoE-Full-VRAM", "MoE-Expert-Offload", "MoE-CPU-Only"
+};
+
+// =============================================================================
 // Strategy with Prediction (for method matrix output)
 // =============================================================================
 struct StrategyResult {
     StrategyConfig strategy;
     Prediction prediction;
     std::string description;  // Human-readable description
+    MoEPlacementPlan moe_plan;  // MoE-specific placement (empty for dense models)
 };
 
 // =============================================================================

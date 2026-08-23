@@ -84,6 +84,7 @@ set(PLANNER_SOURCES
     src/planner/calibration_log.cpp
     src/planner/calibration_aggregator.cpp
     src/planner/download_manager.cpp
+    src/planner/moe_placer.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
