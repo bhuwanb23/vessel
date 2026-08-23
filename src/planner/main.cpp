@@ -24,6 +24,8 @@
 #include "calibration_aggregator.h"
 #include "download_manager.h"
 #include "../predictor/predictor.h"
+#include "../hotcold/neuron_profiler.h"
+#include "../hotcold/mask_file.h"
 
 #include <cstdio>
 #include <string>

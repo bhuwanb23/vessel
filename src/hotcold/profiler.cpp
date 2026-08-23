@@ -1,4 +1,6 @@
 #include "hotcold/profiler.h"
+#include "hotcold/neuron_profiler.h"
+#include "hotcold/mask_file.h"
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -173,43 +175,31 @@ HotNeuronProfile profile_model_activations(
     uint32_t max_prompts,
     double hot_ratio)
 {
-    HotNeuronProfile profile;
-    profile.model_name = model_path;
-    profile.hot_ratio = hot_ratio;
-
-    // Load prompts
-    std::vector<std::string> prompts;
-    if (prompts_path.empty()) {
-        prompts = load_default_prompts();
+    // Use the neuron profiler engine for full implementation
+    ProfilingConfig config;
+    config.model_path = model_path;
+    config.prompts_path = prompts_path;
+    config.max_prompts = max_prompts;
+    config.hot_ratio = hot_ratio;
+    config.activation = ActivationType::SILU;
+    config.activation_threshold = 0.01f;
+    config.n_gpu_layers = 0;  // CPU-only for profiling
+    
+    fprintf(stderr, "[HotCold Profiler] Starting full profiling pipeline...\n");
+    
+    ProfilingResult result = run_neuron_profiling(config);
+    
+    if (result.success) {
+        fprintf(stderr, "[HotCold Profiler] Profiling complete.\n");
+        return result.profile;
     } else {
-        prompts = load_prompts_from_file(prompts_path);
+        fprintf(stderr, "[HotCold Profiler] Profiling failed: %s\n", result.error_message.c_str());
+        // Return empty profile
+        HotNeuronProfile profile;
+        profile.model_name = model_path;
+        profile.hot_ratio = hot_ratio;
+        return profile;
     }
-
-    // Limit to max_prompts
-    if (prompts.size() > max_prompts) {
-        prompts.resize(max_prompts);
-    }
-
-    profile.num_prompts_used = static_cast<uint32_t>(prompts.size());
-
-    fprintf(stderr, "[HotCold Profiler] Profiling %s with %u prompts...\n",
-            model_path.c_str(), profile.num_prompts_used);
-
-    // NOTE: Full implementation requires llama.cpp model loading and
-    // compute graph hooking. For now, return a placeholder profile.
-    //
-    // In full implementation:
-    // 1. Load model via llama.cpp API
-    // 2. Extract model dimensions (num_layers, ffn_dim, hidden_dim)
-    // 3. Profile each layer using profile_layer_activations()
-    // 4. Rank neurons by activation frequency
-    // 5. Select top hot_ratio * ffn_dim neurons as hot set
-    // 6. Build LayerHotSet for each layer
-
-    fprintf(stderr, "[HotCold Profiler] NOTE: Full profiling requires llama.cpp compute graph hooks.\n");
-    fprintf(stderr, "[HotCold Profiler] Returning placeholder profile for pipeline testing.\n");
-
-    return profile;
 }
 
 // =============================================================================
