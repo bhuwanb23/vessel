@@ -51,8 +51,9 @@ class CalibrationAggregator {
 public:
     // Create an aggregator for a specific hardware fingerprint.
     // Reads the log file and filters by fingerprint.
+    // log_path_override: if empty, uses get_log_path() (platform-specific)
     CalibrationAggregator(const std::string& hardware_fingerprint,
-                          const std::string& log_path = CALIBRATION_LOG_FILE);
+                          const std::string& log_path_override = "");
 
     // Get the aggregated calibration data.
     // Returns a CalibrationData struct with adjusted constants.

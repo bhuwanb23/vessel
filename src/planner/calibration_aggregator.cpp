@@ -36,9 +36,7 @@ CalibrationAggregator::CalibrationAggregator(
         }
     }
 
-    // Debug: print summary
-    fprintf(stderr, "  [Calibration] Log: %s, Total: %d, Matching: %d\n",
-            log_path.c_str(), total_records_, (int)matching_records_.size());
+
 }
 
 // =============================================================================
