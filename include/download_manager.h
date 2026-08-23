@@ -41,11 +41,22 @@ struct PreDownloadCheck {
 struct DownloadResult {
     bool success = false;           // true if download completed + verified
     bool paused = false;            // true if user pressed Ctrl+C (resume possible)
+    bool verified = false;          // true if SHA256 hash was verified
+    bool unverified = false;        // true if no hash was available (warning)
     std::string final_path;         // path to the verified .gguf file
     std::string partial_path;       // path to the .partial file (if paused)
     uint64_t bytes_downloaded = 0;  // total bytes written to disk
     uint64_t file_size = 0;         // expected total size
     std::string error_message;      // human-readable error if !success
+};
+
+// Hash verification result
+struct HashVerifyResult {
+    bool match = false;             // true if hashes match
+    bool available = false;         // true if expected hash was available
+    std::string expected;           // expected SHA256 hex string
+    std::string actual;             // computed SHA256 hex string
+    std::string error;              // error message if computation failed
 };
 
 // =============================================================================
@@ -109,3 +120,26 @@ std::string get_final_path(const std::string& url, const std::string& dir);
 // Check if a .partial file exists and return its size.
 // Returns 0 if no .partial file exists.
 uint64_t get_partial_file_size(const std::string& partial_path);
+
+// =============================================================================
+// Public API — Phase C: Integrity Verification
+// =============================================================================
+
+// Fetch expected SHA256 hash from HuggingFace API.
+// Parses the model repo API to find the lfs.sha256 field.
+// Returns empty string if unavailable.
+std::string fetch_expected_sha256(const std::string& url);
+
+// Compute SHA256 hash of a file using Windows CNG API.
+// Reads file in 4MB chunks, displays progress.
+// Returns hex string of hash, or empty string on error.
+std::string compute_file_sha256(const std::string& file_path);
+
+// Verify file integrity: compute local hash and compare against expected.
+// Returns HashVerifyResult with match/available/error details.
+HashVerifyResult verify_file_integrity(const std::string& file_path,
+                                        const std::string& expected_sha256);
+
+// Convert URL to HuggingFace API URL for fetching model metadata.
+// Extracts owner/repo from the download URL.
+std::string url_to_api_url(const std::string& download_url);

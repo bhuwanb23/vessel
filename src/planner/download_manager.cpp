@@ -4,6 +4,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <winhttp.h>
+#include <bcrypt.h>
 #include <shlobj.h>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +17,7 @@
 #include <mutex>
 
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 // =============================================================================
 // Helper: Convert string to wide string (for WinHTTP)
@@ -287,6 +289,269 @@ std::string find_smaller_quant_that_fits(uint64_t available_bytes,
     }
 
     return "";
+}
+
+// =============================================================================
+// Phase C: Integrity Verification
+// =============================================================================
+
+// Convert download URL to HuggingFace API URL
+std::string url_to_api_url(const std::string& download_url) {
+    // https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+    // → https://huggingface.co/api/models/bartowski/Llama-3.2-3B-Instruct-GGUF
+    
+    // Find "huggingface.co/" in URL
+    size_t hf_pos = download_url.find("huggingface.co/");
+    if (hf_pos == std::string::npos) return "";
+    
+    std::string after_hf = download_url.substr(hf_pos + 16); // skip "huggingface.co/"
+    
+    // Extract owner/repo (first two path segments)
+    size_t slash1 = after_hf.find('/');
+    if (slash1 == std::string::npos) return "";
+    size_t slash2 = after_hf.find('/', slash1 + 1);
+    if (slash2 == std::string::npos) return "";
+    
+    std::string owner_repo = after_hf.substr(0, slash2);
+    return "https://huggingface.co/api/models/" + owner_repo;
+}
+
+// Fetch expected SHA256 from HuggingFace API
+std::string fetch_expected_sha256(const std::string& url) {
+    std::string api_url = url_to_api_url(url);
+    if (api_url.empty()) return "";
+    
+    // Extract filename from URL for matching
+    std::string filename = extract_filename_from_url(url);
+    
+    // Parse API URL
+    ParsedUrl parsed;
+    if (!parse_url(api_url, parsed)) return "";
+    
+    // HTTP GET to API
+    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME,
+                                      WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return "";
+    
+    WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);
+    
+    DWORD redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY,
+                     &redirect_policy, sizeof(redirect_policy));
+    
+    HINTERNET hConnect = WinHttpConnect(hSession, parsed.host.c_str(),
+                                         parsed.port, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
+    
+    DWORD flags = parsed.use_ssl ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", parsed.path.c_str(),
+                                             NULL, WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+    
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+    
+    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "";
+    }
+    
+    // Read response body
+    std::string body;
+    DWORD bytes_available = 0;
+    char buf[4096];
+    while (WinHttpQueryDataAvailable(hRequest, &bytes_available) && bytes_available > 0) {
+        DWORD to_read = std::min(bytes_available, (DWORD)sizeof(buf) - 1);
+        DWORD bytes_read = 0;
+        if (WinHttpReadData(hRequest, buf, to_read, &bytes_read)) {
+            buf[bytes_read] = 0;
+            body += buf;
+        }
+    }
+    
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    
+    if (body.empty()) return "";
+    
+    // Parse JSON to find sha256 for our file
+    // Look for pattern: "rfilename":"<filename>" ... "sha256":"<hash>"
+    // Simple parsing — find the filename, then find sha256 after it
+    
+    size_t file_pos = body.find('"' + filename + '"');
+    if (file_pos == std::string::npos) {
+        // Try without quotes
+        file_pos = body.find(filename);
+    }
+    if (file_pos == std::string::npos) return "";
+    
+    // Search backwards for rfilename to confirm we're in the right entry
+    // Then search forward for sha256
+    size_t sha_pos = body.find("\"sha256\"", file_pos);
+    if (sha_pos == std::string::npos) return "";
+    
+    // Find the colon after sha256
+    size_t colon = body.find(':', sha_pos + 8);
+    if (colon == std::string::npos) return "";
+    
+    // Find opening quote
+    size_t quote_start = body.find('"', colon + 1);
+    if (quote_start == std::string::npos) return "";
+    quote_start++;
+    
+    // Find closing quote
+    size_t quote_end = body.find('"', quote_start);
+    if (quote_end == std::string::npos) return "";
+    
+    std::string sha256 = body.substr(quote_start, quote_end - quote_start);
+    
+    // Validate: should be 64 hex characters
+    if (sha256.length() != 64) return "";
+    for (char c : sha256) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            return "";
+    }
+    
+    return sha256;
+}
+
+// Compute SHA256 hash of a file using Windows CNG API
+std::string compute_file_sha256(const std::string& file_path) {
+    // Open the file
+    FILE* f = fopen(file_path.c_str(), "rb");
+    if (!f) return "";
+    
+    // Get file size for progress
+    fseek(f, 0, SEEK_END);
+    uint64_t file_size = _ftelli64(f);
+    fseek(f, 0, SEEK_SET);
+    
+    // Open CNG algorithm provider
+    BCRYPT_ALG_HANDLE hAlg = NULL;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, 0);
+    if (!BCRYPT_SUCCESS(status)) {
+        fclose(f);
+        return "";
+    }
+    
+    // Create hash object
+    BCRYPT_HASH_HANDLE hHash = NULL;
+    status = BCryptCreateHash(hAlg, &hHash, NULL, 0, NULL, 0, 0);
+    if (!BCRYPT_SUCCESS(status)) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        fclose(f);
+        return "";
+    }
+    
+    // Read file in 4MB chunks
+    const size_t CHUNK_SIZE = 4 * 1024 * 1024;  // 4MB
+    char* buffer = (char*)malloc(CHUNK_SIZE);
+    if (!buffer) {
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        fclose(f);
+        return "";
+    }
+    
+    uint64_t total_read = 0;
+    int last_percent = -1;
+    
+    printf("  Verifying file integrity... ");
+    fflush(stdout);
+    
+    while (!feof(f)) {
+        size_t bytes_read = fread(buffer, 1, CHUNK_SIZE, f);
+        if (bytes_read == 0) break;
+        
+        status = BCryptHashData(hHash, (PUCHAR)buffer, (ULONG)bytes_read, 0);
+        if (!BCRYPT_SUCCESS(status)) {
+            free(buffer);
+            BCryptDestroyHash(hHash);
+            BCryptCloseAlgorithmProvider(hAlg, 0);
+            fclose(f);
+            return "";
+        }
+        
+        total_read += bytes_read;
+        
+        // Progress display
+        if (file_size > 0) {
+            int percent = (int)(100.0 * total_read / file_size);
+            if (percent != last_percent && percent % 10 == 0) {
+                printf("%llu / %llu GB (%d%%)\r  ",
+                       total_read / 1000000000ULL, file_size / 1000000000ULL, percent);
+                fflush(stdout);
+                last_percent = percent;
+            }
+        }
+    }
+    
+    free(buffer);
+    fclose(f);
+    
+    // Finish hash
+    UCHAR hash_value[32] = {};  // SHA256 = 32 bytes
+    status = BCryptFinishHash(hHash, hash_value, 32, 0);
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    
+    if (!BCRYPT_SUCCESS(status)) return "";
+    
+    // Convert to hex string
+    char hex[65] = {};
+    for (int i = 0; i < 32; i++) {
+        snprintf(hex + i * 2, 3, "%02x", hash_value[i]);
+    }
+    
+    printf("done.\n");
+    return std::string(hex);
+}
+
+// Verify file integrity
+HashVerifyResult verify_file_integrity(const std::string& file_path,
+                                        const std::string& expected_sha256) {
+    HashVerifyResult result;
+    
+    if (expected_sha256.empty()) {
+        result.available = false;
+        return result;
+    }
+    
+    result.available = true;
+    result.expected = expected_sha256;
+    
+    // Compute local hash
+    result.actual = compute_file_sha256(file_path);
+    if (result.actual.empty()) {
+        result.error = "Failed to compute file hash";
+        return result;
+    }
+    
+    // Compare (case-insensitive)
+    std::string expected_lower = expected_sha256;
+    std::string actual_lower = result.actual;
+    std::transform(expected_lower.begin(), expected_lower.end(),
+                   expected_lower.begin(), ::tolower);
+    std::transform(actual_lower.begin(), actual_lower.end(),
+                   actual_lower.begin(), ::tolower);
+    
+    result.match = (expected_lower == actual_lower);
+    return result;
 }
 
 // =============================================================================
@@ -653,6 +918,13 @@ DownloadResult download_model_file(const std::string& url,
     }
     result.file_size = file_size;
 
+    // --- Phase C: Fetch expected SHA256 hash before downloading ---
+    std::string expected_sha256 = fetch_expected_sha256(url);
+    if (expected_sha256.empty()) {
+        fprintf(stderr, "\nWarning: No SHA256 hash available for verification.\n");
+        fprintf(stderr, "   File integrity will not be confirmed.\n");
+    }
+
     // Check for existing .partial file (resume)
     uint64_t resume_offset = get_partial_file_size(partial_path);
 
@@ -698,12 +970,48 @@ DownloadResult download_model_file(const std::string& url,
         return result;
     }
 
+    // --- Phase C: Verify file integrity ---
+    HashVerifyResult hash_result = verify_file_integrity(partial_path, expected_sha256);
+    
+    if (!hash_result.available) {
+        // No hash available — warn and proceed
+        result.unverified = true;
+        fprintf(stderr, "\nWarning: No SHA256 hash available for verification.\n");
+        fprintf(stderr, "   File integrity not confirmed.\n");
+    } else if (!hash_result.match) {
+        // Hash mismatch — delete .partial, report error
+        fprintf(stderr, "\nFile integrity check failed.\n");
+        fprintf(stderr, "   Expected SHA256: %s\n", hash_result.expected.c_str());
+        fprintf(stderr, "   Actual SHA256:   %s\n", hash_result.actual.c_str());
+        fprintf(stderr, "\nThe downloaded file is corrupted. This can happen due to:\n");
+        fprintf(stderr, "   - Network errors during transfer\n");
+        fprintf(stderr, "   - Disk errors on the target drive\n");
+        fprintf(stderr, "   - CDN serving a stale/corrupt copy\n");
+        fprintf(stderr, "\nThe corrupted file has been deleted. Run the command again to re-download.\n");
+        std::remove(partial_path.c_str());
+        result.error_message = "SHA256 mismatch: file is corrupted";
+        return result;
+    } else {
+        // Hash matches — verified!
+        result.verified = true;
+        printf("Integrity verified: SHA256 %s\n", hash_result.actual.c_str());
+    }
+
     // Rename .partial to final filename
     std::error_code ec;
     std::filesystem::rename(partial_path, final_path_str, ec);
     if (ec) {
-        result.error_message = "Could not rename .partial to final: " + ec.message();
-        return result;
+        // Fallback: copy + delete (for cross-volume moves)
+        fprintf(stderr, "Warning: Rename failed (%s), trying copy...\n", ec.message().c_str());
+        std::error_code copy_ec;
+        std::filesystem::copy_file(partial_path, final_path_str,
+                                    std::filesystem::copy_options::overwrite_existing, copy_ec);
+        if (copy_ec) {
+            result.error_message = "Could not move file to final location: " + copy_ec.message();
+            return result;
+        }
+        std::remove(partial_path.c_str());
+        fprintf(stderr, "File copied (rename was not possible on this volume).\n");
     }
 
     result.success = true;
