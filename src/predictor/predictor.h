@@ -7,12 +7,20 @@
 #include "predictor_validation.h"
 #include "confidence_calculator.h"
 
+// Forward declare CalibrationData to avoid circular includes
+struct CalibrationData;
+
 // =============================================================================
 // Main Prediction Function
 // =============================================================================
 
 // Main orchestrator - combines all prediction modules
+// Overload without calibration: uses hardcoded defaults (Step 3 behavior)
 Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const StrategyConfig& strategy);
+
+// Overload with calibration: uses adjusted constants from Step 7 log
+Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
+                   const StrategyConfig& strategy, const CalibrationData& cal);
 
 // =============================================================================
 // Viability Check

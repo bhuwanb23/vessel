@@ -1,4 +1,5 @@
 #include "predictor.h"
+#include "calibration_aggregator.h"
 #include <sstream>
 #include <iomanip>
 
@@ -95,6 +96,132 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
         pred.warnings += "Context length exceeds safe limit; may cause OOM. ";
     }
     
+    return pred;
+}
+
+// =============================================================================
+// Calibrated Prediction (Step 7)
+// =============================================================================
+// Same logic as predict() but uses adjusted constants from calibration log.
+// =============================================================================
+
+Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
+                   const StrategyConfig& strategy, const CalibrationData& cal) {
+    Prediction pred;
+
+    // Determine effective context length
+    uint32_t ctx_len = strategy.context_length > 0 ? strategy.context_length : model.context_length;
+    if (ctx_len == 0) ctx_len = 4096;
+
+    // Determine effective GPU layers
+    uint32_t gpu_layers = strategy.gpu_layers;
+    if (gpu_layers == 0 && strategy.placement == PlacementStrategy::FULL_GPU) {
+        gpu_layers = model.layers;
+    } else if (strategy.placement == PlacementStrategy::CPU_ONLY) {
+        gpu_layers = 0;
+    }
+
+    // Calculate memory components
+    pred.memory_vram_bytes = 0;
+    pred.memory_ram_bytes = 0;
+
+    uint64_t weight_bytes = predict_weight_memory(model);
+    uint64_t kv_bytes = predict_kv_cache_memory(model, ctx_len, strategy.kv_quant_bits);
+
+    // Use calibrated overhead if available, otherwise use defaults
+    bool use_gpu = (gpu_layers > 0);
+    uint64_t overhead_bytes;
+    if (use_gpu && cal.adjusted_gpu_overhead_bytes > 0) {
+        overhead_bytes = cal.adjusted_gpu_overhead_bytes;
+    } else if (!use_gpu && cal.adjusted_cpu_overhead_bytes > 0) {
+        overhead_bytes = cal.adjusted_cpu_overhead_bytes;
+    } else {
+        overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
+    }
+
+    // Distribute memory based on strategy
+    if (gpu_layers >= model.layers) {
+        pred.memory_vram_bytes = weight_bytes + kv_bytes + overhead_bytes;
+        pred.memory_ram_bytes = 0;
+    } else if (gpu_layers == 0) {
+        pred.memory_vram_bytes = 0;
+        pred.memory_ram_bytes = weight_bytes + kv_bytes + overhead_bytes;
+    } else {
+        double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
+        double cpu_ratio = 1.0 - gpu_ratio;
+        uint64_t gpu_weights = static_cast<uint64_t>(weight_bytes * gpu_ratio);
+        uint64_t cpu_weights = weight_bytes - gpu_weights;
+        uint64_t gpu_kv = static_cast<uint64_t>(kv_bytes * gpu_ratio);
+        uint64_t cpu_kv = kv_bytes - gpu_kv;
+        uint64_t gpu_overhead = static_cast<uint64_t>(overhead_bytes * 0.7);
+        uint64_t cpu_overhead = overhead_bytes - gpu_overhead;
+        pred.memory_vram_bytes = gpu_weights + gpu_kv + gpu_overhead;
+        pred.memory_ram_bytes = cpu_weights + cpu_kv + cpu_overhead;
+    }
+
+    pred.memory_total_bytes = pred.memory_vram_bytes + pred.memory_ram_bytes;
+    pred.max_safe_context = calculate_max_safe_context(hw, model, strategy);
+
+    // Calculate decode speed with calibrated efficiency
+    pred.tokens_per_sec = 0.0;
+    {
+        double weight_bpt = predict_bytes_per_token(model);
+        double kv_bpt = predict_kv_bytes_per_token(model, strategy.kv_quant_bits);
+        double total_bpt = weight_bpt + kv_bpt;
+        if (total_bpt > 0) {
+            if (gpu_layers >= model.layers && hw.gpu_bandwidth_gbs > 0) {
+                double eff = (cal.adjusted_gpu_decode_efficiency > 0)
+                    ? cal.adjusted_gpu_decode_efficiency : 0.27;
+                double theoretical = (hw.gpu_bandwidth_gbs * 1e9) / total_bpt;
+                pred.tokens_per_sec = theoretical * eff;
+            } else if (gpu_layers == 0) {
+                double ram_bw = hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 40.0;
+                double eff = (cal.adjusted_cpu_decode_efficiency > 0)
+                    ? cal.adjusted_cpu_decode_efficiency : 0.80;
+                double theoretical = (ram_bw * 1e9) / total_bpt;
+                pred.tokens_per_sec = theoretical * eff;
+            } else {
+                // Split: use GPU efficiency for GPU portion, CPU for CPU portion
+                double gpu_frac = static_cast<double>(gpu_layers) / model.layers;
+                double cpu_frac = 1.0 - gpu_frac;
+                double gpu_bw = hw.gpu_bandwidth_gbs > 0 ? hw.gpu_bandwidth_gbs : 0;
+                double ram_bw = hw.ram_bandwidth_gbs > 0 ? hw.ram_bandwidth_gbs : 40.0;
+                double gpu_eff = (cal.adjusted_gpu_decode_efficiency > 0)
+                    ? cal.adjusted_gpu_decode_efficiency : 0.27;
+                double cpu_eff = (cal.adjusted_cpu_decode_efficiency > 0)
+                    ? cal.adjusted_cpu_decode_efficiency : 0.80;
+                double time_gpu = (gpu_bw > 0)
+                    ? (gpu_frac * total_bpt / (gpu_bw * 1e9 * gpu_eff)) : 1e6;
+                double time_cpu = cpu_frac * total_bpt / (ram_bw * 1e9 * cpu_eff);
+                if (time_gpu + time_cpu > 0)
+                    pred.tokens_per_sec = 1.0 / (time_gpu + time_cpu);
+            }
+        }
+    }
+
+    // Calculate prompt eval speed with calibrated prefill efficiency
+    pred.prompt_eval_tps = predict_prompt_eval_speed(hw, model, gpu_layers);
+
+    // Calculate TTFT
+    pred.ttft_ms = predict_ttft_ms(hw, model, ctx_len, gpu_layers);
+
+    // Viability and confidence
+    pred.viable = check_viability(hw, pred.memory_total_bytes);
+    int cal_count = cal.matching_record_count;
+    ConfidenceResult conf = calculate_confidence(model, hw, ctx_len, cal_count);
+    pred.confidence = conf.level;
+    pred.confidence_reason = conf.reason;
+
+    // Warnings
+    if (!pred.viable) {
+        pred.warnings = "Model does not fit in available memory with this strategy.";
+    } else if (pred.memory_vram_bytes > hw.vram_free_bytes && hw.vram_free_bytes > 0) {
+        pred.warnings = "VRAM usage exceeds free VRAM; some layers will be offloaded to CPU.";
+    }
+    if (ctx_len > pred.max_safe_context && pred.max_safe_context > 0) {
+        pred.warnings += "Context length exceeds safe limit; may cause OOM. ";
+    }
+
     return pred;
 }
 
