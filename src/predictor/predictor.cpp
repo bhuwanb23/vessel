@@ -83,6 +83,9 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
         // Compute MoE placement plan
         MoEPlacementPlan moe_plan = computeMoEPlacement(hw, model, strategy);
         
+        fprintf(stderr, "  [MoE] plan: viable=%d gpu_experts=%u/%u\n",
+                moe_plan.viable, moe_plan.gpu_experts_per_layer, model.expert_count);
+        
         // Only compute range for expert-offload (partial GPU)
         // Full VRAM or CPU-Only are point estimates
         if (moe_plan.viable && moe_plan.gpu_experts_per_layer > 0 
@@ -96,6 +99,8 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
                 pred.gpu_hit_probability = moe_pred.p_gpu;
                 // Use expected as the point estimate
                 pred.tokens_per_sec = moe_pred.tok_s_expected;
+                fprintf(stderr, "  [MoE] range: %.1f - %.1f (expected %.1f) tok/s\n",
+                        moe_pred.tok_s_worst, moe_pred.tok_s_best, moe_pred.tok_s_expected);
             }
         }
     }

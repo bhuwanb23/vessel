@@ -253,6 +253,11 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     strat.kv_quant_bits = kv_bits;
                     
                     Prediction pred = predict(hw, model, strat, cal);
+                    // Debug: show MoE range
+                    if (pred.is_moe_range) {
+                        fprintf(stderr, "  [MoE-Offload] range: %.1f - %.1f (expected %.1f) tok/s\n",
+                                pred.tok_s_worst, pred.tok_s_best, pred.tok_s_expected);
+                    }
                     // Override memory with MoE plan values
                     pred.memory_vram_bytes = plan.total_vram_bytes;
                     pred.memory_ram_bytes = plan.total_ram_bytes;
