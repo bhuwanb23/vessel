@@ -242,6 +242,97 @@ int main(int argc, char* argv[]) {
 
     printf("\n");
 
+    // =========================================================================
+    // --profile-neurons: Neuron Activation Profiling Mode
+    // =========================================================================
+    if (profile_neurons) {
+        printf("=== Neuron Activation Profiling ===\n");
+        printf("Model:     %s\n", model_url.c_str());
+        printf("Hot ratio: %.0f%%\n", hot_ratio * 100.0);
+        if (vram_budget > 0) {
+            printf("VRAM budget: %.1f GB\n", vram_budget / 1e9);
+        }
+        printf("\n");
+
+        // Determine model path
+        std::string profile_model_path = model_path;
+        if (profile_model_path.empty() && is_url) {
+            // Try to find the model locally
+            profile_model_path = model_url;
+            // Check if file exists
+            std::ifstream test(profile_model_path);
+            if (!test.is_open()) {
+                fprintf(stderr, "Error: --profile-neurons requires a local model file.\n");
+                fprintf(stderr, "  Download the model first, then use --model-path.\n");
+                return 1;
+            }
+        }
+
+        if (profile_model_path.empty()) {
+            fprintf(stderr, "Error: --profile-neurons requires a model file path.\n");
+            return 1;
+        }
+
+        // Run profiling
+        ProfilingConfig config;
+        config.model_path = profile_model_path;
+        config.prompts_path = "";  // Use bundled prompts
+        config.max_prompts = 500;
+        config.hot_ratio = hot_ratio;
+        config.activation = ActivationType::SILU;
+        config.activation_threshold = 0.01f;
+        config.n_gpu_layers = 0;  // CPU-only for profiling
+        config.vram_budget_bytes = vram_budget;
+        config.validate_stability = true;
+
+        // Progress callback
+        auto progress = [](const ProfilingProgress& p) {
+            if (p.current_prompt > 0 && p.current_prompt % 10 == 0) {
+                fprintf(stderr, "\r[Profiling] Prompt %u/%u | Tokens: %llu | ETA: %.0fs ",
+                        p.current_prompt, p.total_prompts,
+                        (unsigned long long)p.tokens_processed,
+                        p.estimated_remaining_seconds);
+            }
+        };
+
+        printf("Starting neuron profiling...\n");
+        printf("This may take 1-4 hours depending on model size.\n\n");
+
+        ProfilingResult result = run_neuron_profiling(config, progress);
+        fprintf(stderr, "\n");
+
+        if (!result.success) {
+            fprintf(stderr, "Error: Profiling failed: %s\n", result.error_message.c_str());
+            return 1;
+        }
+
+        // Print results
+        printf("=== Profiling Complete ===\n");
+        printf("Time:      %.1f seconds\n", result.total_seconds);
+        printf("Tokens:    %llu\n", (unsigned long long)result.total_tokens);
+        printf("Layers:    %u\n", result.profile.num_layers);
+        printf("FFN dim:   %u\n", result.profile.ffn_dim);
+        printf("Hot ratio: %.0f%%\n", result.profile.hot_ratio * 100.0);
+        
+        if (!result.profile.layers.empty()) {
+            printf("Hot/layer: %u / %u (%.0f%%)\n",
+                   result.profile.layers[0].n_hot,
+                   result.profile.ffn_dim,
+                   100.0 * result.profile.layers[0].n_hot / result.profile.ffn_dim);
+        }
+
+        printf("\nMask file: %s\n", get_mask_file_path(profile_model_path).c_str());
+
+        if (config.validate_stability) {
+            printf("Stability: %.1f%% overlap (%s)\n",
+                   result.stability_overlap * 100.0,
+                   result.stability_passed ? "PASS" : "FAIL");
+        }
+
+        printf("\n");
+        return 0;
+    }
+
     // --- Step 1: Profile Hardware ---
     Timer t_hw;
     HardwareSpec hw = profile_hardware(model_path);  // empty string = skip disk benchmark

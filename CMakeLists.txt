@@ -96,10 +96,13 @@ set(HOTCOLD_SOURCES
     src/hotcold/sparse_ffn.cpp
     src/hotcold/layer_streamer.cpp
     src/hotcold/hotcold_predictor.cpp
+    src/hotcold/neuron_profiler.cpp
+    src/hotcold/mask_file.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
     include
+    include/hotcold
     src/profiler
     src/fetcher
     src/predictor
