@@ -226,7 +226,7 @@ std::vector<LayerProfilingResult> profile_all_layers(
 
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
-    model_params.vocab_only = true;  // Just need metadata
+    model_params.vocab_only = false;  // Need full model for dimensions
 
     llama_model* model = llama_model_load_from_file(model_path.c_str(), model_params);
     if (!model) {
@@ -237,7 +237,7 @@ std::vector<LayerProfilingResult> profile_all_layers(
 
     int32_t n_layers = llama_model_n_layer(model);
     int32_t n_embd = llama_model_n_embd(model);
-    int32_t n_ff = n_embd * 4;  // Estimate FFN dim
+    int32_t n_ff = n_embd * 4;  // Estimate FFN dim (will be refined from GGUF metadata)
     llama_model_free(model);
     llama_backend_free();
 
