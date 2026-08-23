@@ -153,28 +153,48 @@ ExecutionResult execute(const std::string& model_path,
     // D1.5: Check for Hot/Cold Mask File
     // =========================================================================
     HotColdExecConfig hotcold_config = create_hotcold_config(model_path);
-    if (hotcold_config.enabled) {
-        // Calculate tensor_split from the mask profile
-        // We need model dimensions — estimate from GGUF metadata
-        // For now, use the profile's dimensions if available
-        if (hotcold_config.profile.hidden_dim > 0) {
-            calculate_tensor_split(
-                hotcold_config.profile,
-                hotcold_config.profile.hidden_dim,
-                hotcold_config.profile.ffn_dim,
-                hotcold_config.profile.num_layers,
-                4.0,  // bytes_per_param (conservative FP32 estimate)
-                hotcold_config.tensor_split_gpu,
-                hotcold_config.tensor_split_cpu);
-        }
-        print_hotcold_exec_info(hotcold_config);
-    }
-
+    
     // =========================================================================
     // D2: Load Model
     // =========================================================================
     llama_model_params model_params = make_model_params(strategy, nullptr,
                                                          hotcold_config.enabled ? &hotcold_config : nullptr);
+
+    // After loading model, compute tensor_split using actual dimensions
+    if (hotcold_config.enabled) {
+        // Temporarily load model just to get dimensions, then free
+        // Actually, we need the model loaded for inference, so compute
+        // tensor_split after we have the model dimensions
+        // For now, use a pre-load query
+        llama_model_params dim_params = llama_model_default_params();
+        dim_params.vocab_only = true;  // Minimal load for dimensions
+        struct llama_model* dim_model = llama_model_load_from_file(model_path.c_str(), dim_params);
+        if (dim_model) {
+            int32_t actual_n_embd = llama_model_n_embd(dim_model);
+            int32_t actual_n_layer = llama_model_n_layer(dim_model);
+            llama_model_free(dim_model);
+            
+            if (actual_n_embd > 0 && actual_n_layer > 0) {
+                // Use actual FFN dim from profile (4x embd for most architectures)
+                uint32_t actual_ffn = hotcold_config.profile.ffn_dim;
+                if (actual_ffn == 0) actual_ffn = actual_n_embd * 4;
+                
+                // Estimate BPW from model file size
+                // For Q4_K_M: ~4.85 BPW
+                double bytes_per_param = 4.85 / 8.0;  // Conservative estimate
+                
+                calculate_tensor_split(
+                    hotcold_config.profile,
+                    static_cast<uint32_t>(actual_n_embd),
+                    actual_ffn,
+                    static_cast<uint32_t>(actual_n_layer),
+                    bytes_per_param,
+                    hotcold_config.tensor_split_gpu,
+                    hotcold_config.tensor_split_cpu);
+            }
+        }
+        print_hotcold_exec_info(hotcold_config);
+    }
 
     struct llama_model* model = llama_model_load_from_file(
         model_path.c_str(), model_params);
