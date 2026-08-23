@@ -153,6 +153,21 @@ target_link_directories(executor_test PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(executor_test PRIVATE ${LLAMA_LIBS} nvml winhttp)
 
 # ============================================
+# executor_phase_j_test — Phase J test suite
+# ============================================
+add_executable(executor_phase_j_test
+    src/planner/executor_phase_j_test.cpp
+    src/planner/executor.cpp
+    src/planner/hardware_sampler.cpp
+    ${PROFILER_SOURCES}
+    ${PREDICTOR_SOURCES}
+)
+
+target_include_directories(executor_phase_j_test PRIVATE ${SHARED_INCLUDE_DIRS})
+target_link_directories(executor_phase_j_test PRIVATE ${SHARED_LINK_DIRS})
+target_link_libraries(executor_phase_j_test PRIVATE ${LLAMA_LIBS} nvml winhttp)
+
+# ============================================
 # predictor_test — Step 3 standalone test
 # ============================================
 add_executable(predictor_test
