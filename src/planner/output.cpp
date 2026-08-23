@@ -241,16 +241,23 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
         char placement[16], gpu_layers[16], context[16], kv_cache[16];
         char vram[16], ram[16], speed[16], ttft[16];
 
-        snprintf(placement, sizeof(placement), "%s",
-                 s.placement == PlacementStrategy::FULL_GPU    ? "Full GPU" :
-                 s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "Split" : "CPU Only");
+        // Show MoE variant name if available
+        if (!r.moe_plan.variant_name.empty()) {
+            snprintf(placement, sizeof(placement), "%s",
+                     r.moe_plan.variant_name.c_str());
+        } else {
+            snprintf(placement, sizeof(placement), "%s",
+                     s.placement == PlacementStrategy::FULL_GPU    ? "Full GPU" :
+                     s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "Split" : "CPU Only");
+        }
         // For MoE models, show expert count instead of layers
-        if (r.moe_plan.viable && r.moe_plan.variant_name.find("MoE") != std::string::npos) {
+        if (!r.moe_plan.variant_name.empty() && r.moe_plan.bytes_per_expert > 0) {
             snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u",
                      r.moe_plan.gpu_experts_per_layer, r.moe_plan.gpu_experts_per_layer + r.moe_plan.cpu_experts_per_layer);
         } else {
-            snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u", s.gpu_layers, 28);
-        }
+            // Use first result's strategy to infer total layers
+            uint32_t total = results.empty() ? 28 : (results[0].strategy.gpu_layers > 0 ? results[0].strategy.gpu_layers : 28);
+            snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u", s.gpu_layers, total);
         snprintf(context, sizeof(context), "%uK", s.context_length / 1024);
         snprintf(kv_cache, sizeof(kv_cache), "%s", s.kv_quant_bits == 16 ? "FP16" : "Q8");
         fmt_memory(vram, sizeof(vram), p.memory_vram_bytes);

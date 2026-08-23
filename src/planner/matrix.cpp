@@ -79,11 +79,15 @@ static std::vector<StrategyResult> deduplicate(const std::vector<StrategyResult>
     std::set<std::string> seen;
     
     for (const auto& strat : strategies) {
-        // Create unique key from strategy parameters
+        // Create unique key from strategy parameters + MoE variant
         std::ostringstream oss;
         oss << strat.strategy.gpu_layers << "_"
             << strat.strategy.context_length << "_"
             << strat.strategy.kv_quant_bits;
+        // Add MoE variant name if present (prevents dense/MoE dedup)
+        if (!strat.moe_plan.variant_name.empty()) {
+            oss << "_" << strat.moe_plan.variant_name;
+        }
         std::string key = oss.str();
         
         if (seen.find(key) == seen.end()) {
@@ -261,7 +265,9 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     result.moe_plan = plan;
                     
                     std::ostringstream oss;
-                    oss << "MoE Full VRAM (ctx=" << ctx;
+                    oss << "MoE Full VRAM";
+                    if (!plan.viable) oss << " (" << plan.reason << ")";
+                    oss << " (ctx=" << ctx;
                     if (kv_bits == 8) oss << ", KV=Q8";
                     oss << ")";
                     result.description = oss.str();
@@ -292,11 +298,11 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     result.moe_plan = plan;
                     
                     std::ostringstream oss;
-                    oss << "MoE Expert Offload (";
+                    oss << "MoE Expert Offload";
                     if (plan.viable) {
-                        oss << plan.gpu_experts_per_layer << "/" << model.expert_count << " experts on GPU";
+                        oss << " (" << plan.gpu_experts_per_layer << "/" << model.expert_count << " experts on GPU";
                     } else {
-                        oss << plan.reason;
+                        oss << " (" << plan.reason;
                     }
                     oss << ", ctx=" << ctx;
                     if (kv_bits == 8) oss << ", KV=Q8";
@@ -329,7 +335,9 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     result.moe_plan = plan;
                     
                     std::ostringstream oss;
-                    oss << "MoE CPU Only (ctx=" << ctx;
+                    oss << "MoE CPU Only";
+                    if (!plan.viable) oss << " (" << plan.reason << ")";
+                    oss << " (ctx=" << ctx;
                     if (kv_bits == 8) oss << ", KV=Q8";
                     oss << ")";
                     result.description = oss.str();
