@@ -68,6 +68,7 @@ int main(int argc, char* argv[]) {
     bool execute_mode        = false;   // --execute: run inference after planning
     std::string prompt       = DEFAULT_PROMPT;
     std::string download_dir;           // --download-dir override
+    bool skip_verify         = false;   // --skip-verify: skip SHA256 verification
     int max_tokens           = 100;
 
     for (int i = 1; i < argc; i++) {
@@ -180,6 +181,8 @@ int main(int argc, char* argv[]) {
             if (max_tokens <= 0) max_tokens = 100;
         } else if (arg == "--execute") {
             execute_mode = true;
+        } else if (arg == "--skip-verify") {
+            skip_verify = true;
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg[0] != '-' && !model_specified) {
@@ -323,8 +326,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // --- Step 8 Phase A: Pre-Download Safety Check (URL mode only) ---
-    // If user provided a URL but no local file, check disk space before proceeding
+    // --- Step 8: Download Manager (URL mode only) ---
     if (is_url && model_path.empty()) {
         // Resolve download directory
         std::string target_dir = download_dir.empty() ? get_default_download_dir() : download_dir;
@@ -333,104 +335,101 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Check if model already exists locally
         std::string filename = extract_filename_from_url(model_url);
+        printf("Checking for model file...\n");
+
+        // --- Scenario 1: Model already on disk ---
         std::string local_candidate = target_dir + "\\" + filename;
         { std::ifstream test(local_candidate);
           if (test.is_open()) {
             model_path = local_candidate;
-            printf("Model found locally: %s\n", model_path.c_str());
+            printf("  Found: %s\n", model_path.c_str());
           }
         }
 
         if (model_path.empty()) {
-            // --- Phase D: Detect if model is multi-shard ---
-            printf("Checking download requirements...\n");
+            // --- Phase D: Detect shards ---
             ModelShards shards = detect_model_shards(model_url);
-
             if (!shards.error_message.empty()) {
-                fprintf(stderr, "\nError detecting shards: %s\n", shards.error_message.c_str());
+                fprintf(stderr, "  Error detecting shards: %s\n", shards.error_message.c_str());
                 return 1;
             }
 
             if (shards.is_sharded) {
-                // Multi-shard model
-                printf("Model: %s (%d shards, %.1f GB total)\n",
-                       shards.base_name.c_str(), shards.total_shards,
-                       shards.total_size_bytes / 1e9);
-
-                // Check if all shards already exist
+                // Multi-shard: check if all shards exist
                 if (all_shards_present(shards, target_dir)) {
                     model_path = get_first_shard_path(shards, target_dir);
-                    printf("All shards already downloaded: %s\n\n", model_path.c_str());
+                    printf("  Found all %d shards: %s\n", shards.total_shards, model_path.c_str());
                 } else {
-                    // Pre-download safety check against total size
-                    PreDownloadCheck check = pre_download_check(model_url, model, target_dir);
-                    // Override file size with total shard size
-                    check.file_size_bytes = shards.total_size_bytes;
-                    check.required_bytes = (uint64_t)(shards.total_size_bytes * 1.15);
-                    check.available_bytes = get_disk_free_bytes(target_dir);
-                    check.pass = (check.available_bytes >= check.required_bytes);
+                    // Need to download shards
+                    printf("  Not found. Model has %d shards (%.1f GB total).\n",
+                           shards.total_shards, shards.total_size_bytes / 1e9);
 
-                    if (!check.pass) {
-                        fprintf(stderr, "\nInsufficient disk space for all shards.\n");
-                        fprintf(stderr, "   Total size: %.1f GB\n", shards.total_size_bytes / 1e9);
-                        fprintf(stderr, "   Required:   %.1f GB (with 15%% margin)\n", check.required_bytes / 1e9);
-                        fprintf(stderr, "   Available:  %.1f GB\n", check.available_bytes / 1e9);
+                    // Disk space check
+                    uint64_t required = (uint64_t)(shards.total_size_bytes * 1.15);
+                    uint64_t available = get_disk_free_bytes(target_dir);
+                    if (available < required) {
+                        fprintf(stderr, "\nInsufficient disk space.\n");
+                        fprintf(stderr, "   Required: %.1f GB | Available: %.1f GB | Shortfall: %.1f GB\n",
+                                required / 1e9, available / 1e9, (required - available) / 1e9);
                         return 1;
                     }
 
-                    printf("Downloading %d shards... (Ctrl+C to pause, re-run to resume)\n",
-                           shards.total_shards);
-
-                    bool ok = download_all_shards(shards, target_dir, abort_requested);
-                    if (!ok) {
-                        fprintf(stderr, "\nShard download failed or paused.\n");
-                        return 1;
-                    }
-
+                    printf("  Downloading %d shards...\n", shards.total_shards);
+                    bool ok = download_all_shards(shards, target_dir, abort_requested, skip_verify);
+                    if (!ok) { fprintf(stderr, "\nDownload failed or paused.\n"); return 1; }
                     model_path = get_first_shard_path(shards, target_dir);
-                    printf("\nModel ready: %s (all %d shards)\n\n",
-                           model_path.c_str(), shards.total_shards);
+                    printf("  Model ready: %s (all %d shards)\n", model_path.c_str(), shards.total_shards);
                 }
             } else {
-                // Single-file model (existing logic)
-                PreDownloadCheck check = pre_download_check(model_url, model, target_dir);
+                // --- Scenario 2/3: Single-file model ---
+                // Check for partial file (resume scenario)
+                std::string partial = get_partial_path(model_url, target_dir);
+                uint64_t partial_size = get_partial_file_size(partial);
 
-                if (!check.pass) {
-                    fprintf(stderr, "\n%s\n", check.error_message.c_str());
-                    if (!check.suggestion.empty())
-                        fprintf(stderr, "%s\n", check.suggestion.c_str());
-                    fprintf(stderr, "\n");
+                // Get expected file size
+                uint64_t file_size = get_file_size_via_head(model_url);
+                if (file_size == 0) {
+                    file_size = estimate_file_size_from_metadata(model);
+                }
+
+                if (partial_size > 0 && file_size > 0 && partial_size < file_size) {
+                    // Scenario 3: Partial download exists
+                    printf("  Found partial download (%.2f / %.2f GB, %.0f%% complete).\n",
+                           partial_size / 1e9, file_size / 1e9, 100.0 * partial_size / file_size);
+                } else {
+                    printf("  Not found locally.\n");
+                }
+
+                // Disk space check
+                uint64_t required = (uint64_t)(file_size * 1.15);
+                uint64_t available = get_disk_free_bytes(target_dir);
+                if (available < required) {
+                    fprintf(stderr, "\nInsufficient disk space.\n");
+                    fprintf(stderr, "   Required: %.1f GB | Available: %.1f GB | Shortfall: %.1f GB\n",
+                            required / 1e9, available / 1e9, (required - available) / 1e9);
+                    // Suggest smaller quant
+                    std::string smaller = find_smaller_quant_that_fits(available, model);
+                    if (!smaller.empty()) {
+                        double smaller_bpw = get_bits_per_weight(smaller);
+                        uint64_t smaller_size = (smaller_bpw > 0)
+                            ? (uint64_t)((double)model.param_count * smaller_bpw / 8.0 * 1.05) : 0;
+                        fprintf(stderr, "   Suggestion: %s quantization (~%.1f GB) would fit.\n",
+                                smaller.c_str(), smaller_size / 1e9);
+                    }
                     return 1;
                 }
 
-                printf("Model size: %.1f GB (source: %s)\n",
-                       check.file_size_bytes / 1e9,
-                       check.size_source == SizeSource::HEAD_REQUEST ? "HTTP HEAD" : "metadata estimate");
-                printf("Required:   %.1f GB (with 15%% safety margin)\n",
-                       check.required_bytes / 1e9);
-                printf("Available:  %.1f GB on %s\n",
-                       check.available_bytes / 1e9, target_dir.c_str());
-                printf("Download:   %s\\%s\n\n", target_dir.c_str(), filename.c_str());
+                // Download
+                printf("  Downloading %s...\n", filename.c_str());
+                DownloadResult dl = download_model_file(
+                    model_url, target_dir, file_size, abort_requested, skip_verify);
 
-                // Download the model (resumable, with progress)
-                printf("Downloading... (Ctrl+C to pause, re-run to resume)\n");
-                DownloadResult dl_result = download_model_file(
-                    model_url, target_dir, check.file_size_bytes, abort_requested);
+                if (dl.paused) { printf("\nDownload paused. Re-run to resume.\n"); return 0; }
+                if (!dl.success) { fprintf(stderr, "  Download failed: %s\n", dl.error_message.c_str()); return 1; }
 
-                if (dl_result.paused) {
-                    printf("\nDownload paused. Re-run to resume.\n");
-                    return 0;
-                }
-
-                if (!dl_result.success) {
-                    fprintf(stderr, "\nDownload failed: %s\n", dl_result.error_message.c_str());
-                    return 1;
-                }
-
-                model_path = dl_result.final_path;
-                printf("Model ready: %s\n\n", model_path.c_str());
+                model_path = dl.final_path;
+                printf("  Model ready: %s\n", model_path.c_str());
             }
         }
     }

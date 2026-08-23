@@ -47,6 +47,7 @@ struct DownloadResult {
     std::string partial_path;       // path to the .partial file (if paused)
     uint64_t bytes_downloaded = 0;  // total bytes written to disk
     uint64_t file_size = 0;         // expected total size
+    bool was_resumed = false;       // true if this was a resume, not fresh download
     std::string error_message;      // human-readable error if !success
 };
 
@@ -137,7 +138,8 @@ std::string get_default_download_dir();
 DownloadResult download_model_file(const std::string& url,
                                     const std::string& download_dir,
                                     uint64_t file_size,
-                                    std::atomic<bool>& abort_flag);
+                                    std::atomic<bool>& abort_flag,
+                                    bool skip_verify = false);
 
 // Get the .partial file path for a given URL and directory.
 std::string get_partial_path(const std::string& url, const std::string& dir);
@@ -201,4 +203,4 @@ std::string get_first_shard_path(const ModelShards& shards, const std::string& d
 // Downloads each shard, verifies, then moves to next.
 // Returns true if ALL shards downloaded and verified successfully.
 bool download_all_shards(ModelShards& shards, const std::string& download_dir,
-                          std::atomic<bool>& abort_flag);
+                          std::atomic<bool>& abort_flag, bool skip_verify = false);

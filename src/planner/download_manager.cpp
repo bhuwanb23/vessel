@@ -889,7 +889,8 @@ static DownloadResult do_download(
 DownloadResult download_model_file(const std::string& url,
                                     const std::string& download_dir,
                                     uint64_t file_size,
-                                    std::atomic<bool>& abort_flag) {
+                                    std::atomic<bool>& abort_flag,
+                                    bool skip_verify) {
     DownloadResult result;
 
     std::string partial_path = get_partial_path(url, download_dir);
@@ -919,10 +920,15 @@ DownloadResult download_model_file(const std::string& url,
     result.file_size = file_size;
 
     // --- Phase C: Fetch expected SHA256 hash before downloading ---
-    std::string expected_sha256 = fetch_expected_sha256(url);
-    if (expected_sha256.empty()) {
-        fprintf(stderr, "\nWarning: No SHA256 hash available for verification.\n");
-        fprintf(stderr, "   File integrity will not be confirmed.\n");
+    std::string expected_sha256;
+    if (skip_verify) {
+        fprintf(stderr, "\nWarning: SHA256 verification skipped (--skip-verify).\n");
+    } else {
+        expected_sha256 = fetch_expected_sha256(url);
+        if (expected_sha256.empty()) {
+            fprintf(stderr, "\nWarning: No SHA256 hash available for verification.\n");
+            fprintf(stderr, "   File integrity will not be confirmed.\n");
+        }
     }
 
     // Check for existing .partial file (resume)
@@ -971,30 +977,34 @@ DownloadResult download_model_file(const std::string& url,
     }
 
     // --- Phase C: Verify file integrity ---
-    HashVerifyResult hash_result = verify_file_integrity(partial_path, expected_sha256);
-    
-    if (!hash_result.available) {
-        // No hash available — warn and proceed
+    if (skip_verify || expected_sha256.empty()) {
         result.unverified = true;
-        fprintf(stderr, "\nWarning: No SHA256 hash available for verification.\n");
-        fprintf(stderr, "   File integrity not confirmed.\n");
-    } else if (!hash_result.match) {
-        // Hash mismatch — delete .partial, report error
-        fprintf(stderr, "\nFile integrity check failed.\n");
-        fprintf(stderr, "   Expected SHA256: %s\n", hash_result.expected.c_str());
-        fprintf(stderr, "   Actual SHA256:   %s\n", hash_result.actual.c_str());
-        fprintf(stderr, "\nThe downloaded file is corrupted. This can happen due to:\n");
-        fprintf(stderr, "   - Network errors during transfer\n");
-        fprintf(stderr, "   - Disk errors on the target drive\n");
-        fprintf(stderr, "   - CDN serving a stale/corrupt copy\n");
-        fprintf(stderr, "\nThe corrupted file has been deleted. Run the command again to re-download.\n");
-        std::remove(partial_path.c_str());
-        result.error_message = "SHA256 mismatch: file is corrupted";
-        return result;
+        if (!skip_verify) {
+            fprintf(stderr, "\nWarning: No SHA256 hash available. File integrity not confirmed.\n");
+        }
     } else {
+        printf("\nVerifying integrity... ");
+        fflush(stdout);
+        HashVerifyResult hash_result = verify_file_integrity(partial_path, expected_sha256);
+        
+        if (!hash_result.match) {
+            // Hash mismatch — delete .partial, report error
+            printf("FAILED\n");
+            fprintf(stderr, "\nFile integrity check failed.\n");
+            fprintf(stderr, "   Expected SHA256: %s\n", hash_result.expected.c_str());
+            fprintf(stderr, "   Actual SHA256:   %s\n", hash_result.actual.c_str());
+            fprintf(stderr, "\nThe downloaded file is corrupted. This can happen due to:\n");
+            fprintf(stderr, "   - Network errors during transfer\n");
+            fprintf(stderr, "   - Disk errors on the target drive\n");
+            fprintf(stderr, "   - CDN serving a stale/corrupt copy\n");
+            fprintf(stderr, "\nThe corrupted file has been deleted. Run the command again to re-download.\n");
+            std::remove(partial_path.c_str());
+            result.error_message = "SHA256 mismatch: file is corrupted";
+            return result;
+        }
         // Hash matches — verified!
         result.verified = true;
-        printf("Integrity verified: SHA256 %s\n", hash_result.actual.c_str());
+        printf("SHA256 matches\n");
     }
 
     // Rename .partial to final filename
@@ -1283,7 +1293,7 @@ std::string get_first_shard_path(const ModelShards& shards, const std::string& d
 
 // Download all shards sequentially
 bool download_all_shards(ModelShards& shards, const std::string& download_dir,
-                          std::atomic<bool>& abort_flag) {
+                          std::atomic<bool>& abort_flag, bool skip_verify) {
     if (shards.shards.empty()) return false;
     
     int total = (int)shards.shards.size();
@@ -1320,7 +1330,7 @@ bool download_all_shards(ModelShards& shards, const std::string& download_dir,
         
         // Download this shard
         DownloadResult dl = download_model_file(
-            shard.url, download_dir, shard.size_bytes, abort_flag);
+            shard.url, download_dir, shard.size_bytes, abort_flag, skip_verify);
         
         if (dl.paused) {
             printf("\nDownload paused at shard %d/%d. Run again to resume.\n",

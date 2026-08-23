@@ -492,6 +492,7 @@ void print_usage() {
     printf("  --priority <speed|quality|safety>   Rank by (default: speed)\n");
     printf("  --context <4k|max|both>             Contexts to evaluate (default: both)\n");
     printf("  --execute                           Run inference after planning\n");
+    printf("  --skip-verify                       Skip SHA256 verification on download\n");
     printf("  --prompt <text>                     Prompt for inference (default: benchmark)\n");
     printf("  --max-tokens <N>                    Max tokens to generate (default: 100)\n");
     printf("  --verbose                           Full hardware & model reports\n");
