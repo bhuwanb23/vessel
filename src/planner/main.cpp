@@ -190,31 +190,39 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // --- Resolve model path ---
-    std::string model_path = resolve_model_path(model_url, model_local);
-    if (model_path.empty()) {
-        fprintf(stderr, "\nError: Model file not found locally.\n");
+    // --- Determine if URL or local path ---
+    bool is_url = (model_url.find("http://") == 0 || model_url.find("https://") == 0);
+    std::string model_path;  // local file path (empty if URL)
+
+    if (is_url) {
+        // URL mode: use --model-path for execution, URL for metadata
         if (!model_local.empty()) {
-            fprintf(stderr, "  Tried: %s\n", model_local.c_str());
-        } else {
-            // Extract filename from URL
-            std::string filename = model_url;
-            auto pos = model_url.find_last_of('/');
-            if (pos != std::string::npos) filename = model_url.substr(pos + 1);
-            fprintf(stderr, "  Expected: models/%s\n", filename.c_str());
+            model_path = model_local;
+            { std::ifstream test(model_path);
+              if (!test.is_open()) {
+                fprintf(stderr, "\nError: Model file not found: %s\n", model_path.c_str());
+                return 1;
+              }
+            }
         }
-        fprintf(stderr, "\nDownload it first:\n");
-        fprintf(stderr, "  huggingface-cli download <repo> <filename> --local-dir models/\n");
-        fprintf(stderr, "\nOr specify the local path:\n");
-        fprintf(stderr, "  llm-planner --model <url> --model-path ./models/<file>.gguf\n");
-        return 1;
+        // model_path may be empty — that's fine for advisor mode
+    } else {
+        // Local path mode
+        model_path = resolve_model_path(model_url, model_local);
+        if (model_path.empty()) {
+            fprintf(stderr, "\nError: Model file not found locally.\n");
+            fprintf(stderr, "  Tried: %s\n", model_url.c_str());
+            fprintf(stderr, "\nDownload it first:\n");
+            fprintf(stderr, "  huggingface-cli download <repo> <filename> --local-dir models/\n");
+            return 1;
+        }
     }
 
     printf("\n");
 
     // --- Step 1: Profile Hardware ---
     Timer t_hw;
-    HardwareSpec hw = profile_hardware(model_path);
+    HardwareSpec hw = profile_hardware(model_path);  // empty string = skip disk benchmark
 
     const ProfileErrors& pe = get_profile_errors();
     if (pe.gpu_failed && pe.ram_failed) {
@@ -229,7 +237,8 @@ int main(int argc, char* argv[]) {
 
     // --- Step 2: Fetch Model Metadata ---
     Timer t_meta;
-    ModelSpec model = fetch_metadata(model_path);
+    std::string metadata_source = is_url ? model_url : model_path;
+    ModelSpec model = fetch_metadata(metadata_source);
 
     if (model.layers == 0) {
         const std::string& err = get_fetch_error();
@@ -238,7 +247,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "\nError: Failed to fetch model metadata.\n");
         if (http > 0)        fprintf(stderr, "  HTTP Status: %d\n", http);
         if (!err.empty())    fprintf(stderr, "  Details: %s\n", err.c_str());
-        fprintf(stderr, "  Source: %s\n", model_path.c_str());
+        fprintf(stderr, "  Source: %s\n", metadata_source.c_str());
 
         if (model_path.find("huggingface.co") != std::string::npos) {
             if (model_path.find(".gguf") == std::string::npos) {
@@ -308,6 +317,14 @@ int main(int argc, char* argv[]) {
     if (!execute_mode) {
         // Plan-only mode: just print the table and exit
         return 0;
+    }
+
+    // For URL mode, require --model-path for execution
+    if (is_url && model_path.empty()) {
+        fprintf(stderr, "\nError: Execution requires a local model file.\n");
+        fprintf(stderr, "  Use --model-path to specify the local GGUF file.\n");
+        fprintf(stderr, "  Example: llm-planner --model <url> --model-path ./models/file.gguf --execute\n");
+        return 1;
     }
 
     // Find viable strategies for selection
