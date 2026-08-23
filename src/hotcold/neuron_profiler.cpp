@@ -9,6 +9,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <iterator>
 
 // =============================================================================
 // llama.cpp includes (for model loading and inference)
@@ -85,13 +86,14 @@ ForwardPassActivations capture_activations(
         return result;
     }
 
-    // Get model metadata
-    const llama_model_metadata* meta = llama_model_get_metadata(model);
-    uint32_t n_layers = llama_model_n_layers(model);
-    uint32_t n_embd = llama_model_n_embd(model);
-    uint32_t n_ff = llama_model_n_ff(model);
-
-    fprintf(stderr, "[NeuronProfiler] Model: %u layers, %u embd, %u ff\n",
+    // Get model dimensions
+    int32_t n_layers = llama_model_n_layer(model);
+    int32_t n_embd = llama_model_n_embd(model);
+    // FFN dim is not directly available via API; estimate from arch
+    // For Llama: ff_dim = 2 * hidden_dim (SwiGLU), for others varies
+    int32_t n_ff = n_embd * 4;  // Conservative estimate for most architectures
+    
+    fprintf(stderr, "[NeuronProfiler] Model: %d layers, %d embd, ~%d ff\n",
             n_layers, n_embd, n_ff);
 
     if (n_ff == 0 || n_embd == 0 || n_layers == 0) {
@@ -107,7 +109,7 @@ ForwardPassActivations capture_activations(
     ctx_params.n_batch = 512;
     ctx_params.n_threads = 4;
 
-    llama_context* ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context* ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "[NeuronProfiler] Error: Could not create context\n");
         llama_model_free(model);
@@ -116,11 +118,12 @@ ForwardPassActivations capture_activations(
     }
 
     // Tokenize prompt
+    const llama_vocab* vocab = llama_model_get_vocab(model);
     std::vector<llama_token> tokens(prompt.size() + 16);
     int n_tokens = llama_tokenize(
-        model, prompt.c_str(), static_cast<int32_t>(prompt.size()),
+        vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
         tokens.data(), static_cast<int32_t>(tokens.size()),
-        true, false);
+        true, true);
     if (n_tokens < 0) {
         fprintf(stderr, "[NeuronProfiler] Error: Tokenization failed\n");
         llama_free(ctx);
@@ -232,8 +235,9 @@ std::vector<LayerProfilingResult> profile_all_layers(
         return results;
     }
 
-    uint32_t n_layers = llama_model_n_layers(model);
-    uint32_t n_ff = llama_model_n_ff(model);
+    int32_t n_layers = llama_model_n_layer(model);
+    int32_t n_embd = llama_model_n_embd(model);
+    int32_t n_ff = n_embd * 4;  // Estimate FFN dim
     llama_model_free(model);
     llama_backend_free();
 
