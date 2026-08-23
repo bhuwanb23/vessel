@@ -200,10 +200,16 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
     }
 
     // Calculate prompt eval speed with calibrated prefill efficiency
-    pred.prompt_eval_tps = predict_prompt_eval_speed(hw, model, gpu_layers);
+    double prefill_eff = (cal.adjusted_gpu_prefill_efficiency > 0)
+        ? cal.adjusted_gpu_prefill_efficiency : 0.0;  // 0 = use default
+    pred.prompt_eval_tps = (prefill_eff > 0)
+        ? predict_prompt_eval_speed(hw, model, gpu_layers, prefill_eff)
+        : predict_prompt_eval_speed(hw, model, gpu_layers);
 
-    // Calculate TTFT
-    pred.ttft_ms = predict_ttft_ms(hw, model, ctx_len, gpu_layers);
+    // Calculate TTFT with calibrated prefill efficiency
+    pred.ttft_ms = (prefill_eff > 0)
+        ? predict_ttft_ms(hw, model, ctx_len, gpu_layers, prefill_eff)
+        : predict_ttft_ms(hw, model, ctx_len, gpu_layers);
 
     // Viability and confidence
     pred.viable = check_viability(hw, pred.memory_total_bytes);

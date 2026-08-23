@@ -269,3 +269,76 @@ void predict_ttft_bounds(const HardwareSpec& hw, const ModelSpec& model,
     lower_ms = center * 0.6;  // Best case: 60% of center
     upper_ms = center * 1.4;  // Worst case: 140% of center
 }
+
+// =============================================================================
+// Calibrated Overloads (Step 7)
+// =============================================================================
+
+double predict_prompt_eval_speed(const HardwareSpec& hw, const ModelSpec& model,
+                                 uint32_t gpu_layers, double gpu_prefill_efficiency) {
+    if (model.param_count == 0 || model.layers == 0) return 0.0;
+
+    double flops_per_token = 2.0 * static_cast<double>(model.param_count);
+
+    double device_tflops = 0.0;
+
+    if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
+        // Use calibrated efficiency if > 0, otherwise default to 0.23
+        double eff = (gpu_prefill_efficiency > 0) ? gpu_prefill_efficiency : 0.23;
+
+        double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
+        device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * eff;
+
+        if (gpu_ratio < 1.0) {
+            double cpu_tflops = 0.8;
+            device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
+        }
+    } else {
+        device_tflops = 0.8;
+    }
+
+    if (device_tflops <= 0) return 0.0;
+    return (device_tflops * 1e12) / flops_per_token;
+}
+
+double predict_ttft_ms(const HardwareSpec& hw, const ModelSpec& model,
+                       uint32_t prompt_tokens, uint32_t gpu_layers,
+                       double gpu_prefill_efficiency) {
+    if (prompt_tokens == 0) return 0.0;
+
+    // Memory-bound component
+    double decode_tps = predict_decode_speed(hw, model, gpu_layers, 4096, 16);
+    double ttft_memory_ms = (decode_tps > 0)
+        ? (static_cast<double>(prompt_tokens) / decode_tps * 1000.0) : 10000.0;
+
+    // Compute-bound component (with calibrated efficiency)
+    double flops_per_token = 2.0 * static_cast<double>(model.param_count);
+    double total_flops = flops_per_token * prompt_tokens;
+
+    double device_tflops = 0.0;
+    if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
+        double eff = (gpu_prefill_efficiency > 0) ? gpu_prefill_efficiency : 0.23;
+        double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
+        device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * eff;
+        if (gpu_ratio < 1.0) {
+            device_tflops += (1.0 - gpu_ratio) * 0.8;
+        }
+    } else {
+        device_tflops = 0.8;
+    }
+
+    double ttft_compute_ms = (device_tflops > 0)
+        ? (total_flops / (device_tflops * 1e12) * 1000.0) : 10000.0;
+
+    // Hybrid blend
+    double alpha = 0.0;
+    if (prompt_tokens <= 256) alpha = 0.0;
+    else if (prompt_tokens >= 2048) alpha = 1.0;
+    else alpha = static_cast<double>(prompt_tokens - 256) / (2048.0 - 256.0);
+
+    double ttft_ms = (1.0 - alpha) * ttft_memory_ms + alpha * ttft_compute_ms;
+    ttft_ms = std::max(ttft_ms, static_cast<double>(prompt_tokens) * 0.1);
+    ttft_ms = std::min(ttft_ms, 60000.0);
+
+    return ttft_ms;
+}
