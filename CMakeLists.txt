@@ -69,6 +69,7 @@ set(PREDICTOR_SOURCES
     src/predictor/context_analyzer.cpp
     src/predictor/predictor_validation.cpp
     src/predictor/confidence_calculator.cpp
+    src/predictor/moe_predictor.cpp
 )
 
 set(PLANNER_SOURCES

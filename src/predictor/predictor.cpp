@@ -1,4 +1,6 @@
 #include "predictor.h"
+#include "moe_predictor.h"
+#include "../../include/moe_placer.h"
 #include "calibration_aggregator.h"
 #include <sstream>
 #include <iomanip>
@@ -75,6 +77,30 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     pred.tokens_per_sec = predict_decode_speed(hw, model, gpu_layers, ctx_len, strategy.kv_quant_bits);
     pred.prompt_eval_tps = predict_prompt_eval_speed(hw, model, gpu_layers);
     pred.ttft_ms = predict_ttft_ms(hw, model, ctx_len, gpu_layers);
+    
+    // MoE range prediction (Step 9, Phase D)
+    if (is_moe_model(model) && gpu_layers > 0 && gpu_layers < model.layers) {
+        // For MoE expert-offload, compute range-based prediction
+        MoEPlacementPlan moe_plan = computeMoEPlacement(hw, model, strategy);
+        if (moe_plan.viable) {
+            MoEPrediction moe_pred = predictMoERange(hw, model, moe_plan, strategy.kv_quant_bits);
+            if (moe_pred.valid) {
+                pred.is_moe_range = true;
+                pred.tok_s_best = moe_pred.tok_s_best;
+                pred.tok_s_worst = moe_pred.tok_s_worst;
+                pred.tok_s_expected = moe_pred.tok_s_expected;
+                pred.gpu_hit_probability = moe_pred.p_gpu;
+                // Use expected as the point estimate
+                pred.tokens_per_sec = moe_pred.tok_s_expected;
+            }
+        }
+    } else if (is_moe_model(model) && gpu_layers >= model.layers) {
+        // Full VRAM: all experts on GPU, point estimate is fine
+        pred.is_moe_range = false;
+    } else if (is_moe_model(model) && gpu_layers == 0) {
+        // CPU only: all experts on CPU, point estimate is fine
+        pred.is_moe_range = false;
+    }
     
     // Check viability
     pred.viable = check_viability(hw, pred.memory_total_bytes);

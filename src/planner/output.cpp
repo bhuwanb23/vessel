@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 #include <fstream>
+#include <cmath>
 
 // =============================================================================
 // Context Mode
@@ -107,6 +108,23 @@ static void fmt_speed(char* buf, size_t n, double tps) {
     if (tps <= 0)        snprintf(buf, n, "-");
     else if (tps >= 100) snprintf(buf, n, "~%.0f", tps);
     else                 snprintf(buf, n, "~%.1f", tps);
+}
+
+static void fmt_speed_range(char* buf, size_t n, double worst, double best, double expected) {
+    if (worst <= 0 && best <= 0) {
+        snprintf(buf, n, "-");
+    } else if (worst <= 0) {
+        fmt_speed(buf, n, best);
+    } else if (std::abs(best - worst) < 1.0) {
+        // Range too narrow to show — just show expected
+        fmt_speed(buf, n, expected);
+    } else {
+        // Show range: ~worst - best
+        if (best >= 100)
+            snprintf(buf, n, "~%.0f-%.0f", worst, best);
+        else
+            snprintf(buf, n, "~%.1f-%.1f", worst, best);
+    }
 }
 
 static void fmt_ttft(char* buf, size_t n, double ms) {
@@ -266,6 +284,10 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
         if (st == StrategyStatus::NO_FIT) {
             snprintf(speed, sizeof(speed), "-");
             snprintf(ttft,  sizeof(ttft),  "-");
+        } else if (p.is_moe_range) {
+            // MoE: show range [worst - best]
+            fmt_speed_range(speed, sizeof(speed), p.tok_s_worst, p.tok_s_best, p.tok_s_expected);
+            fmt_ttft(ttft,   sizeof(ttft),  p.ttft_ms);
         } else {
             fmt_speed(speed, sizeof(speed), p.tokens_per_sec);
             fmt_ttft(ttft,   sizeof(ttft),  p.ttft_ms);
