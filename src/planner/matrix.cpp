@@ -260,14 +260,10 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
                     pred.viable = plan.viable;
                     
-                    // Compute MoE range prediction
-                    fprintf(stderr, "  [MoE] plan viable=%d gpu_exp=%u cpu_exp=%u total=%u\n",
-                            plan.viable, plan.gpu_experts_per_layer, plan.cpu_experts_per_layer, model.expert_count);
+                    // Compute MoE range prediction using the plan we already have
                     if (plan.viable && plan.gpu_experts_per_layer > 0
                         && plan.gpu_experts_per_layer < model.expert_count) {
                         MoEPrediction moe_pred = predictMoERange(hw, model, plan, kv_bits);
-                        fprintf(stderr, "  [MoE] range valid=%d best=%.1f worst=%.1f expected=%.1f\n",
-                                moe_pred.valid, moe_pred.tok_s_best, moe_pred.tok_s_worst, moe_pred.tok_s_expected);
                         if (moe_pred.valid) {
                             pred.is_moe_range = true;
                             pred.tok_s_best = moe_pred.tok_s_best;
@@ -310,6 +306,20 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     pred.memory_ram_bytes = plan.total_ram_bytes;
                     pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
                     pred.viable = plan.viable;
+                    
+                    // Compute MoE range prediction
+                    if (plan.viable && plan.gpu_experts_per_layer > 0
+                        && plan.gpu_experts_per_layer < model.expert_count) {
+                        MoEPrediction moe_pred = predictMoERange(hw, model, plan, kv_bits);
+                        if (moe_pred.valid) {
+                            pred.is_moe_range = true;
+                            pred.tok_s_best = moe_pred.tok_s_best;
+                            pred.tok_s_worst = moe_pred.tok_s_worst;
+                            pred.tok_s_expected = moe_pred.tok_s_expected;
+                            pred.gpu_hit_probability = moe_pred.p_gpu;
+                            pred.tokens_per_sec = moe_pred.tok_s_expected;
+                        }
+                    }
                     
                     StrategyResult result;
                     result.strategy = strat;
