@@ -423,6 +423,61 @@ int main(int argc, char* argv[]) {
     printf("Prompt:     \"%s\"\n", prompt.c_str());
     printf("Max tokens: %d\n\n", max_tokens);
 
+    // --- Step 8 Phase A: Pre-Download Safety Check ---
+    // Only runs for URL mode when model isn't already local
+    if (is_url && model_path.empty()) {
+        // Resolve download directory
+        std::string target_dir = download_dir.empty() ? get_default_download_dir() : download_dir;
+        if (!ensure_download_dir(target_dir)) {
+            fprintf(stderr, "Error: Could not create download directory: %s\n", target_dir.c_str());
+            return 1;
+        }
+
+        // Check if model already exists locally
+        std::string filename = extract_filename_from_url(model_url);
+        std::string local_candidate = target_dir + "\\" + filename;
+        { std::ifstream test(local_candidate);
+          if (test.is_open()) {
+            model_path = local_candidate;
+            printf("Model found locally: %s\n", model_path.c_str());
+          }
+        }
+
+        if (model_path.empty()) {
+            // Model not local — run pre-download safety check
+            printf("Checking download requirements...\n");
+            PreDownloadCheck check = pre_download_check(model_url, model, target_dir);
+
+            if (!check.pass) {
+                fprintf(stderr, "\n%s\n", check.error_message.c_str());
+                if (!check.suggestion.empty())
+                    fprintf(stderr, "%s\n", check.suggestion.c_str());
+                fprintf(stderr, "\n");
+                return 1;
+            }
+
+            printf("Model size: %.1f GB (source: %s)\n",
+                   check.file_size_bytes / 1e9,
+                   check.size_source == SizeSource::HEAD_REQUEST ? "HTTP HEAD" : "metadata estimate");
+            printf("Required:   %.1f GB (with 15%% safety margin)\n",
+                   check.required_bytes / 1e9);
+            printf("Available:  %.1f GB on %s\n",
+                   check.available_bytes / 1e9, target_dir.c_str());
+            printf("Download:   %s\\%s\n\n", target_dir.c_str(), filename.c_str());
+
+            // TODO: Phase B will add the actual download here
+            // For now, tell the user to download manually
+            fprintf(stderr, "Download not yet implemented in this phase.\n");
+            fprintf(stderr, "Download manually with:\n");
+            fprintf(stderr, "  curl -L -o \"%s\\%s\" \"%s\"\n",
+                    target_dir.c_str(), filename.c_str(), model_url.c_str());
+            fprintf(stderr, "\nThen re-run with:\n");
+            fprintf(stderr, "  llm-planner --model \"%s\" --model-path \"%s\\%s\" --execute\n",
+                    model_url.c_str(), target_dir.c_str(), filename.c_str());
+            return 0;
+        }
+    }
+
     // Initialize executor
     printf("Initializing executor...\n");
     if (!executor_init()) {
