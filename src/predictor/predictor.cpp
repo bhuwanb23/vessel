@@ -79,10 +79,14 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     pred.ttft_ms = predict_ttft_ms(hw, model, ctx_len, gpu_layers);
     
     // MoE range prediction (Step 9, Phase D)
-    if (is_moe_model(model) && gpu_layers > 0 && gpu_layers < model.layers) {
-        // For MoE expert-offload, compute range-based prediction
+    if (is_moe_model(model)) {
+        // Compute MoE placement plan
         MoEPlacementPlan moe_plan = computeMoEPlacement(hw, model, strategy);
-        if (moe_plan.viable) {
+        
+        // Only compute range for expert-offload (partial GPU)
+        // Full VRAM or CPU-Only are point estimates
+        if (moe_plan.viable && moe_plan.gpu_experts_per_layer > 0 
+            && moe_plan.gpu_experts_per_layer < model.expert_count) {
             MoEPrediction moe_pred = predictMoERange(hw, model, moe_plan, strategy.kv_quant_bits);
             if (moe_pred.valid) {
                 pred.is_moe_range = true;
@@ -94,12 +98,6 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
                 pred.tokens_per_sec = moe_pred.tok_s_expected;
             }
         }
-    } else if (is_moe_model(model) && gpu_layers >= model.layers) {
-        // Full VRAM: all experts on GPU, point estimate is fine
-        pred.is_moe_range = false;
-    } else if (is_moe_model(model) && gpu_layers == 0) {
-        // CPU only: all experts on CPU, point estimate is fine
-        pred.is_moe_range = false;
     }
     
     // Check viability
