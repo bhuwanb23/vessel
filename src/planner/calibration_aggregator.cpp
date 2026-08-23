@@ -20,8 +20,11 @@ static constexpr double   DEFAULT_GPU_PREFILL_EFFICIENCY = 0.23;
 
 CalibrationAggregator::CalibrationAggregator(
     const std::string& hardware_fingerprint,
-    const std::string& log_path)
+    const std::string& log_path_override)
 {
+    // Resolve log path: use override if provided, otherwise get platform-specific path
+    std::string log_path = log_path_override.empty() ? get_log_path() : log_path_override;
+
     // Step D1: Load all entries
     std::vector<CalibrationRecord> all_records = read_all_records(log_path);
     total_records_ = static_cast<int>(all_records.size());
