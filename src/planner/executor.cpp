@@ -157,31 +157,22 @@ ExecutionResult execute(const std::string& model_path,
     // =========================================================================
     // D2: Load Model
     // =========================================================================
-    llama_model_params model_params = make_model_params(strategy, nullptr,
-                                                         hotcold_config.enabled ? &hotcold_config : nullptr);
-
-    // After loading model, compute tensor_split using actual dimensions
+    // For hot/cold, we need to compute tensor_split BEFORE loading.
+    // Use a temporary full load to get dimensions, then reload with tensor_split.
     if (hotcold_config.enabled) {
-        // Temporarily load model just to get dimensions, then free
-        // Actually, we need the model loaded for inference, so compute
-        // tensor_split after we have the model dimensions
-        // For now, use a pre-load query
+        // First load: get dimensions only
         llama_model_params dim_params = llama_model_default_params();
-        dim_params.vocab_only = true;  // Minimal load for dimensions
+        dim_params.n_gpu_layers = 0;
         struct llama_model* dim_model = llama_model_load_from_file(model_path.c_str(), dim_params);
         if (dim_model) {
             int32_t actual_n_embd = llama_model_n_embd(dim_model);
             int32_t actual_n_layer = llama_model_n_layer(dim_model);
-            llama_model_free(dim_model);
             
             if (actual_n_embd > 0 && actual_n_layer > 0) {
-                // Use actual FFN dim from profile (4x embd for most architectures)
                 uint32_t actual_ffn = hotcold_config.profile.ffn_dim;
                 if (actual_ffn == 0) actual_ffn = actual_n_embd * 4;
                 
-                // Estimate BPW from model file size
-                // For Q4_K_M: ~4.85 BPW
-                double bytes_per_param = 4.85 / 8.0;  // Conservative estimate
+                double bytes_per_param = 4.85 / 8.0;
                 
                 calculate_tensor_split(
                     hotcold_config.profile,
@@ -192,9 +183,13 @@ ExecutionResult execute(const std::string& model_path,
                     hotcold_config.tensor_split_gpu,
                     hotcold_config.tensor_split_cpu);
             }
+            llama_model_free(dim_model);
         }
         print_hotcold_exec_info(hotcold_config);
     }
+    
+    llama_model_params model_params = make_model_params(strategy, nullptr,
+                                                         hotcold_config.enabled ? &hotcold_config : nullptr);
 
     struct llama_model* model = llama_model_load_from_file(
         model_path.c_str(), model_params);
