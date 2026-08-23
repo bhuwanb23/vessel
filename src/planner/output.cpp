@@ -255,9 +255,9 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
             snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u",
                      r.moe_plan.gpu_experts_per_layer, r.moe_plan.gpu_experts_per_layer + r.moe_plan.cpu_experts_per_layer);
         } else {
-            // Use first result's strategy to infer total layers
-            uint32_t total = results.empty() ? 28 : (results[0].strategy.gpu_layers > 0 ? results[0].strategy.gpu_layers : 28);
-            snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u", s.gpu_layers, total);
+            // For dense models, use gpu_layers (set to total for FULL_GPU)
+            snprintf(gpu_layers, sizeof(gpu_layers), "%u", s.gpu_layers);
+        }
         snprintf(context, sizeof(context), "%uK", s.context_length / 1024);
         snprintf(kv_cache, sizeof(kv_cache), "%s", s.kv_quant_bits == 16 ? "FP16" : "Q8");
         fmt_memory(vram, sizeof(vram), p.memory_vram_bytes);
