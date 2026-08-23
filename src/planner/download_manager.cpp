@@ -558,16 +558,43 @@ HashVerifyResult verify_file_integrity(const std::string& file_path,
 // Phase B: Resumable Download
 // =============================================================================
 
+// Extract repo owner/name from HuggingFace URL
+std::string extract_repo_path(const std::string& url) {
+    // https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/file.gguf
+    // → bartowski/Llama-3.2-3B-Instruct-GGUF
+    size_t hf_pos = url.find("huggingface.co/");
+    if (hf_pos == std::string::npos) return "";
+    std::string after = url.substr(hf_pos + 16);
+    size_t slash1 = after.find('/');
+    if (slash1 == std::string::npos) return "";
+    size_t slash2 = after.find('/', slash1 + 1);
+    if (slash2 == std::string::npos) return after;  // owner/repo with no path after
+    return after.substr(0, slash2);
+}
+
+// Get download path with repo-based subdirectory
+std::string get_repo_subdir_path(const std::string& url, const std::string& dir) {
+    std::string repo = extract_repo_path(url);
+    if (repo.empty()) {
+        // Not a HF URL or can't parse — use flat structure
+        std::string filename = extract_filename_from_url(url);
+        return dir + "\\" + filename;
+    }
+    // Replace '/' with '\\' for Windows path
+    std::string subdir = repo;
+    for (auto& c : subdir) { if (c == '/') c = '\\'; }
+    std::string filename = extract_filename_from_url(url);
+    return dir + "\\" + subdir + "\\" + filename;
+}
+
 // Get the .partial file path for a given URL and directory
 std::string get_partial_path(const std::string& url, const std::string& dir) {
-    std::string filename = extract_filename_from_url(url);
-    return dir + "\\" + filename + ".partial";
+    return get_repo_subdir_path(url, dir) + ".partial";
 }
 
 // Get the final .gguf file path
 std::string get_final_path(const std::string& url, const std::string& dir) {
-    std::string filename = extract_filename_from_url(url);
-    return dir + "\\" + filename;
+    return get_repo_subdir_path(url, dir);
 }
 
 // Check if a .partial file exists and return its size
@@ -592,15 +619,23 @@ struct ProgressState {
     int window_idx = 0;
     std::chrono::steady_clock::time_point last_update;
     double current_speed_mbs = 0.0;
+    // Edge Case 4: Disk space re-check
+    uint64_t last_disk_check_bytes = 0;  // bytes at last disk check
+    static constexpr uint64_t DISK_CHECK_INTERVAL = 500 * 1024 * 1024;  // 500MB
+    std::string download_dir;
+    // Edge Case 5: Stall detection
+    std::chrono::steady_clock::time_point last_nonzero_speed_time;
+    bool stall_warned = false;
 };
 
-static void update_progress(ProgressState& state, uint64_t current_bytes) {
+static bool update_progress(ProgressState& state, uint64_t current_bytes) {
+    // Returns false if download should be aborted (disk full)
     auto now = std::chrono::steady_clock::now();
     state.bytes_downloaded = current_bytes;
 
     // Update sliding window every 500ms
     double elapsed_since_update = std::chrono::duration<double>(now - state.last_update).count();
-    if (elapsed_since_update < 0.5) return;
+    if (elapsed_since_update < 0.5) return true;
 
     state.window_bytes[state.window_idx % ProgressState::WINDOW_SIZE] = current_bytes;
     state.window_idx++;
@@ -614,7 +649,7 @@ static void update_progress(ProgressState& state, uint64_t current_bytes) {
         if (total_elapsed > 0.1) {
             state.current_speed_mbs = (current_bytes / 1e6) / total_elapsed;
         }
-        return;
+        return true;
     }
 
     uint64_t oldest = state.window_bytes[(state.window_idx - count) % ProgressState::WINDOW_SIZE];
@@ -623,6 +658,34 @@ static void update_progress(ProgressState& state, uint64_t current_bytes) {
     if (window_time > 0.1) {
         state.current_speed_mbs = ((newest - oldest) / 1e6) / window_time;
     }
+
+    // Edge Case 5: Stall detection — warn if zero speed for >60s
+    if (state.current_speed_mbs < 0.1) {
+        double stall_secs = std::chrono::duration<double>(now - state.last_nonzero_speed_time).count();
+        if (stall_secs > 60 && !state.stall_warned) {
+            fprintf(stderr, "\n  ⚠️  Download stalled for %.0fs. Check if your antivirus is scanning the models folder.\n", stall_secs);
+            state.stall_warned = true;
+        }
+    } else {
+        state.last_nonzero_speed_time = now;
+        state.stall_warned = false;
+    }
+
+    // Edge Case 4: Disk space re-check every 500MB
+    if (!state.download_dir.empty() &&
+        (current_bytes - state.last_disk_check_bytes) >= ProgressState::DISK_CHECK_INTERVAL) {
+        state.last_disk_check_bytes = current_bytes;
+        uint64_t remaining = state.file_size - current_bytes;
+        uint64_t free_space = get_disk_free_bytes(state.download_dir);
+        if (free_space < remaining + 100 * 1024 * 1024) {  // 100MB buffer
+            fprintf(stderr, "\n  ⚠️  Low disk space (%.1f GB free, %.1f GB remaining).\n",
+                    free_space / 1e9, remaining / 1e9);
+            fprintf(stderr, "     Download paused. Free space and re-run to resume.\n");
+            return false;  // signal abort
+        }
+    }
+
+    return true;
 }
 
 static void print_progress_bar(const ProgressState& state) {
@@ -775,6 +838,25 @@ static DownloadResult do_download(
                          WINHTTP_HEADER_NAME_BY_INDEX,
                          &status_code, &status_size, WINHTTP_NO_HEADER_INDEX);
 
+    // Edge Case 1: HTTP 429 Rate Limiting — retry after backoff
+    if (status_code == 429) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        // Retry after 30 seconds (simple backoff)
+        fprintf(stderr, "\n  Rate limited (HTTP 429). Retrying in 30s...\n");
+        Sleep(30000);
+        // Recursive retry (max 3 attempts via static counter)
+        static int retry_count = 0;
+        if (retry_count < 3) {
+            retry_count++;
+            return do_download(url, partial_path, final_path, file_size, resume_offset, abort_flag);
+        }
+        retry_count = 0;
+        result.error_message = "HTTP 429: Rate limited after 3 retries";
+        return result;
+    }
+
     // Accept 200 (fresh) or 206 (partial content / resume)
     bool is_resume = (status_code == 206);
     if (status_code != 200 && status_code != 206) {
@@ -812,7 +894,14 @@ static DownloadResult do_download(
     progress.file_size = file_size;
     progress.start_time = std::chrono::steady_clock::now();
     progress.last_update = progress.start_time;
+    progress.last_nonzero_speed_time = progress.start_time;
     progress.bytes_downloaded = resume_offset;
+    progress.last_disk_check_bytes = resume_offset;
+    // Extract directory from partial_path for disk space checks
+    { size_t last_slash = partial_path.find_last_of('\\');
+      if (last_slash != std::string::npos)
+          progress.download_dir = partial_path.substr(0, last_slash);
+    }
 
     printf("\nDownloading %s\n", extract_filename_from_url(url).c_str());
     if (resume_offset > 0) {
@@ -862,8 +951,16 @@ static DownloadResult do_download(
             total_written += bytes_read;
             remaining -= bytes_read;
 
-            // Update progress display
-            update_progress(progress, total_written);
+            // Update progress display (returns false if disk full)
+            if (!update_progress(progress, total_written)) {
+                result.error_message = "Disk full — download paused. Free space and re-run to resume.";
+                fclose(file);
+                WinHttpCloseHandle(hRequest);
+                WinHttpCloseHandle(hConnect);
+                WinHttpCloseHandle(hSession);
+                result.bytes_downloaded = total_written;
+                return result;
+            }
             print_progress_bar(progress);
         }
     }
@@ -895,6 +992,15 @@ DownloadResult download_model_file(const std::string& url,
 
     std::string partial_path = get_partial_path(url, download_dir);
     std::string final_path_str = get_final_path(url, download_dir);
+
+    // Ensure repo subdirectory exists (Edge Case 3: filename conflicts)
+    {
+        size_t last_slash = partial_path.find_last_of('\\');
+        if (last_slash != std::string::npos) {
+            std::string subdir = partial_path.substr(0, last_slash);
+            ensure_download_dir(subdir);
+        }
+    }
 
     // Check if final file already exists
     {
@@ -1280,7 +1386,11 @@ bool all_shards_present(const ModelShards& shards, const std::string& download_d
     for (const auto& s : shards.shards) {
         std::string path = download_dir + "\\" + s.filename;
         std::error_code ec;
-        if (!std::filesystem::exists(path, ec)) return false;
+        if (!std::filesystem::exists(path, ec)) {
+            // Also check repo-subdirectory path
+            std::string repo_path = get_repo_subdir_path(s.url, download_dir);
+            if (!std::filesystem::exists(repo_path, ec)) return false;
+        }
     }
     return true;
 }
@@ -1288,6 +1398,11 @@ bool all_shards_present(const ModelShards& shards, const std::string& download_d
 // Get path to first shard
 std::string get_first_shard_path(const ModelShards& shards, const std::string& download_dir) {
     if (shards.shards.empty()) return "";
+    // Try repo-subdirectory path first
+    std::string repo_path = get_repo_subdir_path(shards.shards[0].url, download_dir);
+    std::error_code ec;
+    if (std::filesystem::exists(repo_path, ec)) return repo_path;
+    // Fallback to flat path
     return download_dir + "\\" + shards.shards[0].filename;
 }
 
@@ -1310,10 +1425,16 @@ bool download_all_shards(ModelShards& shards, const std::string& download_dir,
             return false;
         }
         
+        // Ensure subdirectory exists
+        std::string shard_final = get_repo_subdir_path(shard.url, download_dir);
+        { size_t ls = shard_final.find_last_of('\\');
+          if (ls != std::string::npos) ensure_download_dir(shard_final.substr(0, ls));
+        }
+
         // Check if this shard already exists
         std::string shard_path = download_dir + "\\" + shard.filename;
         std::error_code ec;
-        if (std::filesystem::exists(shard_path, ec)) {
+        if (std::filesystem::exists(shard_path, ec) || std::filesystem::exists(shard_final, ec)) {
             uint64_t existing_size = std::filesystem::file_size(shard_path, ec);
             if (!ec && existing_size == shard.size_bytes && shard.size_bytes > 0) {
                 printf("  Shard %d/%d: already downloaded (%.1f GB) ✅\n",

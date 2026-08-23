@@ -151,6 +151,16 @@ std::string get_final_path(const std::string& url, const std::string& dir);
 // Returns 0 if no .partial file exists.
 uint64_t get_partial_file_size(const std::string& partial_path);
 
+// Extract repo owner/name from HuggingFace URL.
+// "https://huggingface.co/bartowski/Llama-3.2-3B/resolve/main/x.gguf"
+// → "bartowski/Llama-3.2-3B"
+std::string extract_repo_path(const std::string& url);
+
+// Get download path with repo-based subdirectory.
+// Prevents filename conflicts between different repos.
+// dir/bartowski/Llama-3.2-3B/x.gguf
+std::string get_repo_subdir_path(const std::string& url, const std::string& dir);
+
 // =============================================================================
 // Public API — Phase C: Integrity Verification
 // =============================================================================
