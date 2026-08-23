@@ -244,7 +244,13 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
         snprintf(placement, sizeof(placement), "%s",
                  s.placement == PlacementStrategy::FULL_GPU    ? "Full GPU" :
                  s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "Split" : "CPU Only");
-        snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u", s.gpu_layers, 28);
+        // For MoE models, show expert count instead of layers
+        if (r.moe_plan.viable && r.moe_plan.variant_name.find("MoE") != std::string::npos) {
+            snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u",
+                     r.moe_plan.gpu_experts_per_layer, r.moe_plan.gpu_experts_per_layer + r.moe_plan.cpu_experts_per_layer);
+        } else {
+            snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u", s.gpu_layers, 28);
+        }
         snprintf(context, sizeof(context), "%uK", s.context_length / 1024);
         snprintf(kv_cache, sizeof(kv_cache), "%s", s.kv_quant_bits == 16 ? "FP16" : "Q8");
         fmt_memory(vram, sizeof(vram), p.memory_vram_bytes);

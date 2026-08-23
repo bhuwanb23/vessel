@@ -224,6 +224,122 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
         }
     }
     
+    // =========================================================================
+    // MoE-Specific Strategies (Step 9, Phase B)
+    // =========================================================================
+    // For MoE models, add three specific expert-offload variants:
+    //   1. MoE-Full-VRAM: All shared + all routed experts in VRAM
+    //   2. MoE-Expert-Offload: All shared + E_gpu experts in VRAM, rest in RAM
+    //   3. MoE-CPU-Only: Everything in RAM
+    // =========================================================================
+    if (is_moe_model(model)) {
+        for (uint32_t ctx : contexts) {
+            for (uint32_t kv_bits : kv_quants) {
+                if (ctx > model.context_length) continue;
+                
+                // Strategy 1: MoE Full VRAM (all experts on GPU)
+                {
+                    MoEPlacementPlan plan = computeMoEFullVRAM(hw, model, ctx, kv_bits);
+                    
+                    StrategyConfig strat;
+                    strat.placement = plan.viable ? PlacementStrategy::FULL_GPU : PlacementStrategy::GPU_CPU_SPLIT;
+                    strat.gpu_layers = plan.viable ? model.layers : 0;
+                    strat.context_length = ctx;
+                    strat.batch_size = 1;
+                    strat.kv_quant_bits = kv_bits;
+                    
+                    Prediction pred = predict(hw, model, strat, cal);
+                    // Override memory with MoE plan values
+                    pred.memory_vram_bytes = plan.total_vram_bytes;
+                    pred.memory_ram_bytes = plan.total_ram_bytes;
+                    pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
+                    pred.viable = plan.viable;
+                    
+                    StrategyResult result;
+                    result.strategy = strat;
+                    result.prediction = pred;
+                    result.moe_plan = plan;
+                    
+                    std::ostringstream oss;
+                    oss << "MoE Full VRAM (ctx=" << ctx;
+                    if (kv_bits == 8) oss << ", KV=Q8";
+                    oss << ")";
+                    result.description = oss.str();
+                    
+                    all_strategies.push_back(result);
+                }
+                
+                // Strategy 2: MoE Expert Offload (flagship — as many experts on GPU as fit)
+                {
+                    MoEPlacementPlan plan = computeMoEExpertOffload(hw, model, ctx, kv_bits);
+                    
+                    StrategyConfig strat;
+                    strat.placement = plan.viable ? PlacementStrategy::GPU_CPU_SPLIT : PlacementStrategy::CPU_ONLY;
+                    strat.gpu_layers = plan.viable ? model.layers : 0;  // All layers have GPU experts
+                    strat.context_length = ctx;
+                    strat.batch_size = 1;
+                    strat.kv_quant_bits = kv_bits;
+                    
+                    Prediction pred = predict(hw, model, strat, cal);
+                    pred.memory_vram_bytes = plan.total_vram_bytes;
+                    pred.memory_ram_bytes = plan.total_ram_bytes;
+                    pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
+                    pred.viable = plan.viable;
+                    
+                    StrategyResult result;
+                    result.strategy = strat;
+                    result.prediction = pred;
+                    result.moe_plan = plan;
+                    
+                    std::ostringstream oss;
+                    oss << "MoE Expert Offload (";
+                    if (plan.viable) {
+                        oss << plan.gpu_experts_per_layer << "/" << model.expert_count << " experts on GPU";
+                    } else {
+                        oss << plan.reason;
+                    }
+                    oss << ", ctx=" << ctx;
+                    if (kv_bits == 8) oss << ", KV=Q8";
+                    oss << ")";
+                    result.description = oss.str();
+                    
+                    all_strategies.push_back(result);
+                }
+                
+                // Strategy 3: MoE CPU Only (everything in RAM)
+                {
+                    MoEPlacementPlan plan = computeMoECPUOnly(hw, model, ctx, kv_bits);
+                    
+                    StrategyConfig strat;
+                    strat.placement = PlacementStrategy::CPU_ONLY;
+                    strat.gpu_layers = 0;
+                    strat.context_length = ctx;
+                    strat.batch_size = 1;
+                    strat.kv_quant_bits = kv_bits;
+                    
+                    Prediction pred = predict(hw, model, strat, cal);
+                    pred.memory_vram_bytes = plan.total_vram_bytes;
+                    pred.memory_ram_bytes = plan.total_ram_bytes;
+                    pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
+                    pred.viable = plan.viable;
+                    
+                    StrategyResult result;
+                    result.strategy = strat;
+                    result.prediction = pred;
+                    result.moe_plan = plan;
+                    
+                    std::ostringstream oss;
+                    oss << "MoE CPU Only (ctx=" << ctx;
+                    if (kv_bits == 8) oss << ", KV=Q8";
+                    oss << ")";
+                    result.description = oss.str();
+                    
+                    all_strategies.push_back(result);
+                }
+            }
+        }
+    }
+    
     // Deduplicate
     all_strategies = deduplicate(all_strategies);
     
