@@ -108,13 +108,25 @@ std::string normalizeRamTotal(uint64_t ram_bytes) {
 // NVMe Model — from Windows DeviceIoControl
 // =============================================================================
 
-// Extract drive letter (e.g., "D:") from a file path
+// Extract drive letter (e.g., "D:") from a file path.
+// Handles both absolute (D:\path) and relative (models/file) paths.
 static std::string extractDriveLetter(const std::string& file_path) {
+    // Direct absolute path: D:\...
     if (file_path.size() >= 2 && file_path[1] == ':') {
         std::string drive = file_path.substr(0, 2);
-        // Uppercase
         if (drive[0] >= 'a' && drive[0] <= 'z') drive[0] -= 32;
         return drive;
+    }
+
+    // Relative path — resolve using current working directory
+    char cwd[MAX_PATH] = {};
+    if (GetCurrentDirectoryA(MAX_PATH, cwd) > 0) {
+        std::string full = std::string(cwd) + "\\" + file_path;
+        if (full.size() >= 2 && full[1] == ':') {
+            std::string drive = full.substr(0, 2);
+            if (drive[0] >= 'a' && drive[0] <= 'z') drive[0] -= 32;
+            return drive;
+        }
     }
     return "";
 }
