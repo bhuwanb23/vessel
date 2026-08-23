@@ -81,6 +81,7 @@ set(PLANNER_SOURCES
     src/planner/hardware_sampler.cpp
     src/planner/comparison_report.cpp
     src/planner/hardware_fingerprint.cpp
+    src/planner/calibration_log.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
@@ -167,6 +168,21 @@ add_executable(executor_phase_j_test
 target_include_directories(executor_phase_j_test PRIVATE ${SHARED_INCLUDE_DIRS})
 target_link_directories(executor_phase_j_test PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(executor_phase_j_test PRIVATE ${LLAMA_LIBS} nvml winhttp)
+
+# ============================================
+# calibration_log_test — Step 7 round-trip test
+# ============================================
+add_executable(calibration_log_test
+    src/planner/calibration_log_test.cpp
+    src/planner/calibration_log.cpp
+    src/planner/hardware_fingerprint.cpp
+)
+
+target_include_directories(calibration_log_test PRIVATE
+    include
+)
+
+target_link_libraries(calibration_log_test PRIVATE winhttp)
 
 # ============================================
 # predictor_test — Step 3 standalone test
