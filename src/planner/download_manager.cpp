@@ -877,7 +877,7 @@ static DownloadResult do_download(
     printf("\n");
 
     result.bytes_downloaded = total_written;
-    result.success = true;
+    // success is only set by download_model_file after size + hash verification
     result.final_path = final_path;
     return result;
 }
