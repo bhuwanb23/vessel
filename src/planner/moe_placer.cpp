@@ -43,6 +43,53 @@ static MoEPlacementPlan compute_moe_plan(const HardwareSpec& hw, const ModelSpec
     // Store per-expert size
     plan.bytes_per_expert = one_expert_bytes;
     
+    // =========================================================================
+    // Edge Case 2: Extreme Memory Constraint (Step 9, Phase G)
+    // =========================================================================
+    // If shared parameters alone exceed VRAM, MoE-Expert-Offload is not viable.
+    // Force CPU-Only or MoE-Layer-Streaming instead.
+    // =========================================================================
+    if (!force_cpu_only) {
+        uint64_t min_vram_for_shared = shared_weight_bytes + cuda_overhead;
+        if (hw.vram_free_bytes < min_vram_for_shared) {
+            // Shared params don't fit — cannot do expert offloading
+            plan.viable = false;
+            plan.reason = "Shared parameters (" + std::to_string(shared_weight_bytes / (1024*1024))
+                         + " MB) exceed available VRAM (" + std::to_string(hw.vram_free_bytes / (1024*1024))
+                         + " MB). Expert offloading not possible.";
+            plan.variant_name = "MoE-Expert-Offload";
+            plan.shared_vram_bytes = 0;
+            plan.kv_vram_bytes = 0;
+            plan.gpu_experts_per_layer = 0;
+            plan.cpu_experts_per_layer = model.expert_count;
+            plan.total_vram_bytes = 0;
+            plan.total_ram_bytes = shared_weight_bytes + kv_cache_bytes
+                                 + static_cast<uint64_t>(model.expert_count) * one_expert_bytes * model.layers;
+            return plan;
+        }
+    }
+    
+    // =========================================================================
+    // Edge Case 1: DeepSeek-V3 / R1 Class (N > 32 experts) (Step 9, Phase G)
+    // =========================================================================
+    // For models with >32 experts per layer (e.g., DeepSeek-V3 with 256),
+    // group experts into chunks of 16 for VRAM placement calculations.
+    // This avoids exceeding llama.cpp tensor command line string limits.
+    // =========================================================================
+    uint32_t effective_expert_count = model.expert_count;
+    uint32_t expert_chunk_size = 16;  // Default chunk size
+    bool chunked_placement = false;
+    
+    if (model.expert_count > 32) {
+        chunked_placement = true;
+        // For very large N, we calculate per-chunk VRAM usage
+        // Each chunk represents a group of experts that are placed together
+        effective_expert_count = (model.expert_count + expert_chunk_size - 1) / expert_chunk_size;
+        // Adjust per-expert bytes to be per-chunk bytes
+        one_expert_bytes = one_expert_bytes * expert_chunk_size;
+        plan.bytes_per_expert = one_expert_bytes;
+    }
+    
     // 2. CPU-Only: everything in RAM
     if (force_cpu_only) {
         plan.viable = (shared_weight_bytes + kv_cache_bytes + cuda_overhead +
@@ -115,13 +162,44 @@ static MoEPlacementPlan compute_moe_plan(const HardwareSpec& hw, const ModelSpec
     // 6. Expert-Offload (flagship): fit as many experts as possible
     uint64_t gpu_expert_count = std::min(total_expert_slots, gpu_expert_capacity);
     
-    // Distribute GPU experts evenly across layers
-    uint32_t experts_per_layer_gpu = static_cast<uint32_t>(gpu_expert_count / model.layers);
+    // For chunked placement (DeepSeek-V3), gpu_expert_count is in chunks
+    // Convert back to actual expert count for display
+    uint32_t experts_per_layer_gpu;
+    uint32_t experts_per_layer_cpu;
     
-    // Ensure at least 0 and at most expert_count
-    experts_per_layer_gpu = std::min(experts_per_layer_gpu, model.expert_count);
+    if (chunked_placement) {
+        // gpu_expert_count is in chunks, convert to actual experts
+        uint32_t chunks_per_layer_gpu = static_cast<uint32_t>(gpu_expert_count / model.layers);
+        chunks_per_layer_gpu = std::min(chunks_per_layer_gpu, effective_expert_count);
+        experts_per_layer_gpu = chunks_per_layer_gpu * expert_chunk_size;
+        experts_per_layer_gpu = std::min(experts_per_layer_gpu, model.expert_count);
+        experts_per_layer_cpu = model.expert_count - experts_per_layer_gpu;
+        
+        // Recalculate per-expert bytes for actual experts (not chunks)
+        one_expert_bytes = model.params_per_routed_expert * bytes_per_param;
+        plan.bytes_per_expert = one_expert_bytes;
+    } else {
+        // Standard placement: distribute GPU experts evenly across layers
+        experts_per_layer_gpu = static_cast<uint32_t>(gpu_expert_count / model.layers);
+        experts_per_layer_gpu = std::min(experts_per_layer_gpu, model.expert_count);
+        experts_per_layer_cpu = model.expert_count - experts_per_layer_gpu;
+    }
     
-    uint32_t experts_per_layer_cpu = model.expert_count - experts_per_layer_gpu;
+    // Safety: ensure at least 1 expert on GPU for the strategy to be meaningful
+    if (experts_per_layer_gpu == 0 && !force_cpu_only) {
+        // No experts fit on GPU — this is effectively CPU-only
+        plan.viable = false;
+        plan.reason = "No experts fit in available VRAM (shared params + KV cache use all VRAM)";
+        plan.variant_name = "MoE-Expert-Offload";
+        plan.shared_vram_bytes = shared_weight_bytes;
+        plan.kv_vram_bytes = kv_cache_bytes;
+        plan.gpu_experts_per_layer = 0;
+        plan.cpu_experts_per_layer = model.expert_count;
+        plan.total_vram_bytes = min_vram_required;
+        plan.total_ram_bytes = shared_weight_bytes + kv_cache_bytes
+                             + static_cast<uint64_t>(model.expert_count) * one_expert_bytes * model.layers;
+        return plan;
+    }
     
     // Calculate actual memory usage
     uint64_t actual_gpu_experts = static_cast<uint64_t>(experts_per_layer_gpu) * model.layers;

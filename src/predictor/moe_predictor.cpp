@@ -50,7 +50,13 @@ MoEPrediction predictMoERange(const HardwareSpec& hw, const ModelSpec& model,
     double kv_bytes_per_token = predict_kv_bytes_per_token(model, kv_quant_bits);
     result.active_bytes_per_token += kv_bytes_per_token;
     
-    // Routing probability: P(single token hits GPU expert)
+    // =========================================================================
+    // Routing Probability: P(single token hits GPU expert)
+    // =========================================================================
+    // Phase 1 (Step 9): Assume uniform routing (E_gpu / N)
+    // Phase 2: Integrate calibration log hit-rate data to weigh lower-indexed
+    //          experts as "hotter" (asymmetric routing from training data).
+    // =========================================================================
     result.p_gpu = (N > 0) ? static_cast<double>(E_gpu) / N : 0.0;
     result.k_gpu_expected = k * result.p_gpu;
     result.k_cpu_expected = k * (1.0 - result.p_gpu);
