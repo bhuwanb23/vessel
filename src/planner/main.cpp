@@ -22,6 +22,7 @@
 #include "comparison_report.h"
 #include "calibration_log.h"
 #include "calibration_aggregator.h"
+#include "download_manager.h"
 #include "../predictor/predictor.h"
 
 #include <cstdio>
@@ -66,6 +67,7 @@ int main(int argc, char* argv[]) {
     bool model_specified     = false;
     bool execute_mode        = false;   // --execute: run inference after planning
     std::string prompt       = DEFAULT_PROMPT;
+    std::string download_dir;           // --download-dir override
     int max_tokens           = 100;
 
     for (int i = 1; i < argc; i++) {
@@ -159,6 +161,8 @@ int main(int argc, char* argv[]) {
             model_specified = true;
         } else if (arg == "--model-path" && i + 1 < argc) {
             model_local = argv[++i];
+        } else if (arg == "--download-dir" && i + 1 < argc) {
+            download_dir = argv[++i];
         } else if (arg == "--priority" && i + 1 < argc) {
             std::string val = argv[++i];
             if (!is_valid_priority(val)) {

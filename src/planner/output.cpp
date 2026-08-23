@@ -488,6 +488,7 @@ void print_usage() {
     printf("  --model <url_or_path>               Hugging Face GGUF URL or local file\n\n");
     printf("Options:\n");
     printf("  --model-path <path>                 Local GGUF file (for --model URL)\n");
+    printf("  --download-dir <path>               Directory to download models (default: ~/models)\n");
     printf("  --priority <speed|quality|safety>   Rank by (default: speed)\n");
     printf("  --context <4k|max|both>             Contexts to evaluate (default: both)\n");
     printf("  --execute                           Run inference after planning\n");
