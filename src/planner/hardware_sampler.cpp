@@ -70,6 +70,9 @@ HardwareMetrics HardwareSampler::get_metrics() const {
     std::lock_guard<std::mutex> lock(mutex_);
     metrics.sample_count = static_cast<int>(samples_.size());
 
+    uint64_t pcie_rx_sum = 0;
+    uint64_t pcie_tx_sum = 0;
+
     for (const auto& s : samples_) {
         if (s.vram_used_bytes > metrics.peak_vram_bytes)
             metrics.peak_vram_bytes = s.vram_used_bytes;
@@ -84,6 +87,16 @@ HardwareMetrics HardwareSampler::get_metrics() const {
                 metrics.throttled = true;
             }
         }
+
+        // PCIe throughput aggregation (Step 9, Phase E)
+        pcie_rx_sum += s.pcie_rx_mbs;
+        pcie_tx_sum += s.pcie_tx_mbs;
+    }
+
+    // Average PCIe throughput across all samples
+    if (metrics.sample_count > 0) {
+        metrics.pcie_throughput_mbs = pcie_rx_sum / metrics.sample_count;
+        metrics.pcie_tx_throughput_mbs = pcie_tx_sum / metrics.sample_count;
     }
 
     // GPU bus-off detection
@@ -139,6 +152,16 @@ void HardwareSampler::poll_loop() {
             unsigned int clock = 0;
             if (nvmlDeviceGetClockInfo(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS) {
                 sample.gpu_clock_mhz = clock;
+            }
+
+            // PCIe throughput (Step 9, Phase E — MoE expert streaming)
+            unsigned int pcie_rx = 0;
+            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS) {
+                sample.pcie_rx_mbs = pcie_rx / (1024 * 1024);  // Convert to MB/s
+            }
+            unsigned int pcie_tx = 0;
+            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS) {
+                sample.pcie_tx_mbs = pcie_tx / (1024 * 1024);  // Convert to MB/s
             }
         }
 

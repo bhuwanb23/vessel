@@ -78,6 +78,11 @@ std::string record_to_json(const CalibrationRecord& r) {
     o << "\"gpu_layers\":" << r.gpu_layers << ",";
     o << "\"context\":" << r.context << ",";
     o << "\"kv_quant_bits\":" << r.kv_quant_bits;
+    // MoE-specific strategy fields (Step 9, Phase E)
+    if (r.gpu_experts_per_layer > 0 || r.total_experts_per_layer > 0) {
+        o << ",\"gpu_experts_per_layer\":" << r.gpu_experts_per_layer;
+        o << ",\"total_experts_per_layer\":" << r.total_experts_per_layer;
+    }
     o << "},";
 
     // Predicted
@@ -87,6 +92,12 @@ std::string record_to_json(const CalibrationRecord& r) {
     o << "\"vram_bytes\":" << r.predicted_vram_bytes << ",";
     o << "\"ram_bytes\":" << r.predicted_ram_bytes << ",";
     o << "\"confidence\":\"" << json_escape(r.predicted_confidence) << "\"";
+    // MoE-specific predicted ranges (Step 9, Phase D)
+    if (r.predicted_tokens_per_sec_min > 0 || r.predicted_tokens_per_sec_max > 0) {
+        o << ",\"tokens_per_sec_min\":" << r.predicted_tokens_per_sec_min;
+        o << ",\"tokens_per_sec_max\":" << r.predicted_tokens_per_sec_max;
+        o << ",\"tokens_per_sec_expected\":" << r.predicted_tokens_per_sec_expected;
+    }
     o << "},";
 
     // Actual
@@ -98,6 +109,17 @@ std::string record_to_json(const CalibrationRecord& r) {
     o << "\"throttled\":" << (r.actual_throttled ? "true" : "false") << ",";
     o << "\"tokens_generated\":" << r.actual_tokens_generated << ",";
     o << "\"duration_sec\":" << r.actual_duration_sec;
+    // MoE-specific actual telemetry (Step 9, Phase E)
+    if (r.actual_tokens_per_sec_min > 0 || r.actual_tokens_per_sec_max > 0) {
+        o << ",\"tokens_per_sec_min\":" << r.actual_tokens_per_sec_min;
+        o << ",\"tokens_per_sec_max\":" << r.actual_tokens_per_sec_max;
+    }
+    if (r.actual_pcie_throughput_mbs > 0) {
+        o << ",\"pcie_throughput_mbs\":" << r.actual_pcie_throughput_mbs;
+    }
+    if (r.actual_token_time_variance > 0) {
+        o << ",\"token_time_variance\":" << r.actual_token_time_variance;
+    }
     o << "},";
 
     // Metadata
@@ -215,6 +237,11 @@ bool json_to_record(const std::string& json, CalibrationRecord& record) {
         if (!ctx.empty()) record.context = (uint32_t)std::stoul(ctx);
         std::string kv = find_json_value(strategy_json, "kv_quant_bits");
         if (!kv.empty()) record.kv_quant_bits = (uint32_t)std::stoul(kv);
+        // MoE-specific strategy fields (Step 9, Phase E)
+        std::string ge = find_json_value(strategy_json, "gpu_experts_per_layer");
+        if (!ge.empty()) record.gpu_experts_per_layer = (uint32_t)std::stoul(ge);
+        std::string te = find_json_value(strategy_json, "total_experts_per_layer");
+        if (!te.empty()) record.total_experts_per_layer = (uint32_t)std::stoul(te);
     }
 
     // Predicted sub-object
@@ -230,6 +257,13 @@ bool json_to_record(const std::string& json, CalibrationRecord& record) {
         v = find_json_value(predicted_json, "ram_bytes");
         if (!v.empty()) record.predicted_ram_bytes = std::stoull(v);
         record.predicted_confidence = find_json_value(predicted_json, "confidence");
+        // MoE-specific predicted ranges (Step 9, Phase D)
+        v = find_json_value(predicted_json, "tokens_per_sec_min");
+        if (!v.empty()) record.predicted_tokens_per_sec_min = std::stod(v);
+        v = find_json_value(predicted_json, "tokens_per_sec_max");
+        if (!v.empty()) record.predicted_tokens_per_sec_max = std::stod(v);
+        v = find_json_value(predicted_json, "tokens_per_sec_expected");
+        if (!v.empty()) record.predicted_tokens_per_sec_expected = std::stod(v);
     }
 
     // Actual sub-object

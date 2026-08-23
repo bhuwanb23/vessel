@@ -39,17 +39,26 @@ struct CalibrationRecord {
     // Strategy
     std::string backend;                // "llama.cpp" for MVP
     std::string quant;                  // "Q4_K_M", "Q8_0", etc.
-    std::string placement;              // "FULL_GPU", "GPU_CPU_SPLIT", "CPU_ONLY"
+    std::string placement;              // "FULL_GPU", "GPU_CPU_SPLIT", "CPU_ONLY", "MoE-Expert-Offload", etc.
     uint32_t gpu_layers = 0;
     uint32_t context = 0;
     uint32_t kv_quant_bits = 16;
+    
+    // MoE-specific strategy fields (Step 9, Phase E)
+    uint32_t gpu_experts_per_layer = 0;     // Number of routed experts on GPU per layer
+    uint32_t total_experts_per_layer = 0;   // Total routed experts per layer (N)
 
     // Predicted (from Step 3 predictor)
     double predicted_tokens_per_sec = 0.0;
     double predicted_ttft_ms = 0.0;
     uint64_t predicted_vram_bytes = 0;
     uint64_t predicted_ram_bytes = 0;
-    std::string predicted_confidence;   // "HIGH", "MEDIUM", "LOW"
+    std::string predicted_confidence;   // "HIGH", "MEDIUM", "LOW", "LOW_MOE"
+    
+    // MoE-specific predicted ranges (Step 9, Phase D)
+    double predicted_tokens_per_sec_min = 0.0;   // Worst case (0%% GPU hit)
+    double predicted_tokens_per_sec_max = 0.0;   // Best case (100%% GPU hit)
+    double predicted_tokens_per_sec_expected = 0.0; // Expected (uniform routing)
 
     // Actual (from Step 6 executor)
     double actual_tokens_per_sec = 0.0;
@@ -59,6 +68,12 @@ struct CalibrationRecord {
     bool actual_throttled = false;
     int actual_tokens_generated = 0;
     double actual_duration_sec = 0.0;
+    
+    // MoE-specific actual telemetry (Step 9, Phase E)
+    double actual_tokens_per_sec_min = 0.0;   // Min measured tok/s (variance)
+    double actual_tokens_per_sec_max = 0.0;   // Max measured tok/s (variance)
+    uint64_t actual_pcie_throughput_mbs = 0;   // Average PCIe RX throughput
+    double actual_token_time_variance = 0.0;   // Variance in token generation time
 
     // Metadata
     std::string timestamp;              // ISO 8601 UTC

@@ -20,6 +20,8 @@ struct HardwareSample {
     uint64_t ram_used_bytes = 0;
     uint32_t gpu_temp_celsius = 0;
     uint32_t gpu_clock_mhz = 0;
+    uint32_t pcie_rx_mbs = 0;       // PCIe RX throughput (MB/s)
+    uint32_t pcie_tx_mbs = 0;       // PCIe TX throughput (MB/s)
     uint64_t timestamp_ms = 0;
 };
 
@@ -32,6 +34,14 @@ struct HardwareMetrics {
     bool gpu_bus_off = false;     // NVML query failed — GPU may have fallen off bus
     bool os_swapping = false;     // page file usage spiked — RAM oversubscribed
     int sample_count = 0;
+    
+    // MoE-specific telemetry (Step 9, Phase E)
+    uint64_t pcie_throughput_mbs = 0;     // Average PCIe RX throughput (MB/s)
+    uint64_t pcie_tx_throughput_mbs = 0;  // Average PCIe TX throughput (MB/s)
+    double token_time_variance_ms = 0.0;  // Variance in token generation time (ms^2)
+    double avg_token_time_ms = 0.0;       // Average token generation time (ms)
+    bool vram_verified = false;           // VRAM usage verified against prediction
+    double vram_verification_delta = 0.0; // Actual vs predicted VRAM delta (bytes)
 };
 
 // =============================================================================
