@@ -98,6 +98,7 @@ set(HOTCOLD_SOURCES
     src/hotcold/hotcold_predictor.cpp
     src/hotcold/neuron_profiler.cpp
     src/hotcold/mask_file.cpp
+    src/hotcold/hotcold_executor.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
@@ -168,6 +169,8 @@ add_executable(executor_test
     src/planner/moe_placer.cpp
     src/planner/moe_tensor_overrides.cpp
     src/planner/hardware_fingerprint.cpp
+    src/hotcold/hotcold_executor.cpp
+    src/hotcold/mask_file.cpp
     ${PROFILER_SOURCES}
     ${PREDICTOR_SOURCES}
 )
@@ -186,6 +189,8 @@ add_executable(executor_phase_j_test
     src/planner/moe_placer.cpp
     src/planner/moe_tensor_overrides.cpp
     src/planner/hardware_fingerprint.cpp
+    src/hotcold/hotcold_executor.cpp
+    src/hotcold/mask_file.cpp
     ${PROFILER_SOURCES}
     ${PREDICTOR_SOURCES}
 )

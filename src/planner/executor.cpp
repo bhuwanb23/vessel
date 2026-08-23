@@ -2,6 +2,8 @@
 #include "hardware_sampler.h"
 #include "moe_placer.h"
 #include "moe_tensor_overrides.h"
+#include "../hotcold/hotcold_executor.h"
+#include "../hotcold/mask_file.h"
 #include <llama.h>
 #include <ggml-backend.h>
 #include <cstdio>
@@ -59,7 +61,8 @@ static enum ggml_type kv_bits_to_ggml_type(uint32_t kv_bits) {
 // =============================================================================
 
 static llama_model_params make_model_params(const StrategyConfig& strategy,
-                                             const MoETensorOverrides* moe_overrides = nullptr) {
+                                             const MoETensorOverrides* moe_overrides = nullptr,
+                                             const HotColdExecConfig* hotcold_config = nullptr) {
     llama_model_params params = llama_model_default_params();
 
     // GPU layers: the most critical field
@@ -83,9 +86,6 @@ static llama_model_params make_model_params(const StrategyConfig& strategy,
 
     // Apply MoE tensor overrides if available
     if (moe_overrides && moe_overrides->needed) {
-        // Use tensor_split to control GPU/CPU weight distribution
-        // This is the primary mechanism for MoE expert offloading
-        // NOTE: tensor_split is a const float* — must use static storage
         static float moe_split[2] = {0.0f, 0.0f};
         moe_split[0] = moe_overrides->tensor_split[0];
         moe_split[1] = moe_overrides->tensor_split[1];
@@ -94,6 +94,17 @@ static llama_model_params make_model_params(const StrategyConfig& strategy,
         printf("  MoE tensor split: %.1f%% GPU, %.1f%% CPU\n",
                moe_overrides->tensor_split[0] * 100.0f,
                moe_overrides->tensor_split[1] * 100.0f);
+    }
+    // Apply hot/cold tensor split if available (and no MoE override)
+    else if (hotcold_config && hotcold_config->enabled) {
+        static float hc_split[2] = {0.0f, 0.0f};
+        hc_split[0] = hotcold_config->tensor_split_gpu;
+        hc_split[1] = hotcold_config->tensor_split_cpu;
+        params.tensor_split = hc_split;
+        
+        printf("  Hot/Cold tensor split: %.1f%% GPU, %.1f%% CPU\n",
+               hotcold_config->tensor_split_gpu * 100.0f,
+               hotcold_config->tensor_split_cpu * 100.0f);
     }
 
     return params;
@@ -139,9 +150,31 @@ ExecutionResult execute(const std::string& model_path,
     auto t_start = std::chrono::high_resolution_clock::now();
 
     // =========================================================================
+    // D1.5: Check for Hot/Cold Mask File
+    // =========================================================================
+    HotColdExecConfig hotcold_config = create_hotcold_config(model_path);
+    if (hotcold_config.enabled) {
+        // Calculate tensor_split from the mask profile
+        // We need model dimensions — estimate from GGUF metadata
+        // For now, use the profile's dimensions if available
+        if (hotcold_config.profile.hidden_dim > 0) {
+            calculate_tensor_split(
+                hotcold_config.profile,
+                hotcold_config.profile.hidden_dim,
+                hotcold_config.profile.ffn_dim,
+                hotcold_config.profile.num_layers,
+                4.0,  // bytes_per_param (conservative FP32 estimate)
+                hotcold_config.tensor_split_gpu,
+                hotcold_config.tensor_split_cpu);
+        }
+        print_hotcold_exec_info(hotcold_config);
+    }
+
+    // =========================================================================
     // D2: Load Model
     // =========================================================================
-    llama_model_params model_params = make_model_params(strategy);
+    llama_model_params model_params = make_model_params(strategy, nullptr,
+                                                         hotcold_config.enabled ? &hotcold_config : nullptr);
 
     struct llama_model* model = llama_model_load_from_file(
         model_path.c_str(), model_params);
