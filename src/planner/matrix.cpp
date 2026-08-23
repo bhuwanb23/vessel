@@ -2,6 +2,7 @@
 #include "../predictor/predictor.h"
 #include "../predictor/memory_predictor.h"
 #include "../predictor/context_analyzer.h"
+#include "calibration_aggregator.h"
 #include <algorithm>
 #include <sstream>
 #include <set>
@@ -98,6 +99,12 @@ static std::vector<StrategyResult> deduplicate(const std::vector<StrategyResult>
 // =============================================================================
 
 std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelSpec& model) {
+    CalibrationData empty_cal;
+    return generate_matrix(hw, model, empty_cal);
+}
+
+std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelSpec& model,
+                                            const CalibrationData& cal) {
     std::vector<StrategyResult> all_strategies;
     
     // Calculate key values
@@ -185,8 +192,8 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                 strat.batch_size = 1;
                 strat.kv_quant_bits = kv_bits;
                 
-                // Get prediction
-                Prediction pred = predict(hw, model, strat);
+                // Get prediction (with calibration if available)
+                Prediction pred = predict(hw, model, strat, cal);
                 
                 // Create result
                 StrategyResult result;

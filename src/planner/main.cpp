@@ -21,6 +21,7 @@
 #include "executor.h"
 #include "comparison_report.h"
 #include "calibration_log.h"
+#include "calibration_aggregator.h"
 #include "../predictor/predictor.h"
 
 #include <cstdio>
@@ -178,9 +179,28 @@ int main(int argc, char* argv[]) {
     if (verbose) print_model_full(model);
     else         print_model_brief(model);
 
-    // --- Step 3: Generate Strategy Matrix ---
+    // --- Step 7: Load Calibration Data ---
+    CalibrationAggregator cal_agg(hw.hardware_fingerprint);
+    CalibrationData cal = cal_agg.get_calibration_data();
+    if (cal.has_calibration_data && verbose) {
+        printf("\n--- Calibration Data ---\n");
+        printf("Records:        %d matching / %d total\n",
+               cal.matching_record_count, cal.total_record_count);
+        printf("GPU overhead:   %.0f MB (default: 512 MB)\n",
+               cal.adjusted_gpu_overhead_bytes / 1e6);
+        printf("GPU decode eff: %.3f (default: 0.270)\n",
+               cal.adjusted_gpu_decode_efficiency);
+        printf("CPU decode eff: %.3f (default: 0.800)\n",
+               cal.adjusted_cpu_decode_efficiency);
+        printf("GPU prefill eff: %.3f (default: 0.230)\n",
+               cal.adjusted_gpu_prefill_efficiency);
+    } else if (verbose) {
+        printf("\nNo calibration data for this hardware. Using default constants.\n");
+    }
+
+    // --- Step 3: Generate Strategy Matrix (with calibration) ---
     Timer t_matrix;
-    std::vector<StrategyResult> results = generate_matrix(hw, model);
+    std::vector<StrategyResult> results = generate_matrix(hw, model, cal);
     results = filter_by_context(results, ctx_mode, model.context_length);
 
     // --- Step 4: Rank by Priority ---
@@ -336,8 +356,8 @@ int main(int argc, char* argv[]) {
     printf("Throttled:    %s\n", result.throttled ? "YES" : "No");
     printf("Output:       \"%s\"\n", result.generated_text.c_str());
 
-    // Print comparison report
-    Prediction prediction = predict(hw, model, strat);
+    // Print comparison report (use calibrated predictions)
+    Prediction prediction = predict(hw, model, strat, cal);
     print_comparison_report(prediction, result, strat);
 
     // Write calibration log (Phase C)
