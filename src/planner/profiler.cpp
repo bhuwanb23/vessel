@@ -1,4 +1,5 @@
 #include "profiler.h"
+#include "hardware_fingerprint.h"
 #include "../profiler/ram_profiler.h"
 #include "../profiler/gpu_profiler.h"
 #include "../profiler/disk_profiler.h"
@@ -108,6 +109,9 @@ HardwareSpec profile_hardware(const std::string& model_path_for_disk_bench) {
             profile_errors.disk_slow = true;
         }
     }
+    
+    // Generate hardware fingerprint for calibration log
+    hw.hardware_fingerprint = generateHardwareFingerprint(hw, model_path_for_disk_bench);
     
     return hw;
 }

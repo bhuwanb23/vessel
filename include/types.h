@@ -59,6 +59,9 @@ struct HardwareSpec {
     double nvme_sequential_mbs = 0.0;   // NVMe sequential read (MB/s)
     double nvme_random_4k_mbs = 0.0;    // NVMe random 4K read (MB/s)
 
+    // Hardware fingerprint (unique key for calibration log)
+    std::string hardware_fingerprint;
+
     // GPU Info
     std::string gpu_name;               // GPU model name (for display)
     uint32_t gpu_compute_major = 0;     // CUDA compute capability major
