@@ -344,44 +344,94 @@ int main(int argc, char* argv[]) {
         }
 
         if (model_path.empty()) {
-            // Model not local — run pre-download safety check
+            // --- Phase D: Detect if model is multi-shard ---
             printf("Checking download requirements...\n");
-            PreDownloadCheck check = pre_download_check(model_url, model, target_dir);
+            ModelShards shards = detect_model_shards(model_url);
 
-            if (!check.pass) {
-                fprintf(stderr, "\n%s\n", check.error_message.c_str());
-                if (!check.suggestion.empty())
-                    fprintf(stderr, "%s\n", check.suggestion.c_str());
-                fprintf(stderr, "\n");
+            if (!shards.error_message.empty()) {
+                fprintf(stderr, "\nError detecting shards: %s\n", shards.error_message.c_str());
                 return 1;
             }
 
-            printf("Model size: %.1f GB (source: %s)\n",
-                   check.file_size_bytes / 1e9,
-                   check.size_source == SizeSource::HEAD_REQUEST ? "HTTP HEAD" : "metadata estimate");
-            printf("Required:   %.1f GB (with 15%% safety margin)\n",
-                   check.required_bytes / 1e9);
-            printf("Available:  %.1f GB on %s\n",
-                   check.available_bytes / 1e9, target_dir.c_str());
-            printf("Download:   %s\\%s\n\n", target_dir.c_str(), filename.c_str());
+            if (shards.is_sharded) {
+                // Multi-shard model
+                printf("Model: %s (%d shards, %.1f GB total)\n",
+                       shards.base_name.c_str(), shards.total_shards,
+                       shards.total_size_bytes / 1e9);
 
-            // Download the model (resumable, with progress)
-            printf("Downloading... (Ctrl+C to pause, re-run to resume)\n");
-            DownloadResult dl_result = download_model_file(
-                model_url, target_dir, check.file_size_bytes, abort_requested);
+                // Check if all shards already exist
+                if (all_shards_present(shards, target_dir)) {
+                    model_path = get_first_shard_path(shards, target_dir);
+                    printf("All shards already downloaded: %s\n\n", model_path.c_str());
+                } else {
+                    // Pre-download safety check against total size
+                    PreDownloadCheck check = pre_download_check(model_url, model, target_dir);
+                    // Override file size with total shard size
+                    check.file_size_bytes = shards.total_size_bytes;
+                    check.required_bytes = (uint64_t)(shards.total_size_bytes * 1.15);
+                    check.available_bytes = get_disk_free_bytes(target_dir);
+                    check.pass = (check.available_bytes >= check.required_bytes);
 
-            if (dl_result.paused) {
-                printf("\nDownload paused. Re-run to resume.\n");
-                return 0;
+                    if (!check.pass) {
+                        fprintf(stderr, "\nInsufficient disk space for all shards.\n");
+                        fprintf(stderr, "   Total size: %.1f GB\n", shards.total_size_bytes / 1e9);
+                        fprintf(stderr, "   Required:   %.1f GB (with 15%% margin)\n", check.required_bytes / 1e9);
+                        fprintf(stderr, "   Available:  %.1f GB\n", check.available_bytes / 1e9);
+                        return 1;
+                    }
+
+                    printf("Downloading %d shards... (Ctrl+C to pause, re-run to resume)\n",
+                           shards.total_shards);
+
+                    bool ok = download_all_shards(shards, target_dir, abort_requested);
+                    if (!ok) {
+                        fprintf(stderr, "\nShard download failed or paused.\n");
+                        return 1;
+                    }
+
+                    model_path = get_first_shard_path(shards, target_dir);
+                    printf("\nModel ready: %s (all %d shards)\n\n",
+                           model_path.c_str(), shards.total_shards);
+                }
+            } else {
+                // Single-file model (existing logic)
+                PreDownloadCheck check = pre_download_check(model_url, model, target_dir);
+
+                if (!check.pass) {
+                    fprintf(stderr, "\n%s\n", check.error_message.c_str());
+                    if (!check.suggestion.empty())
+                        fprintf(stderr, "%s\n", check.suggestion.c_str());
+                    fprintf(stderr, "\n");
+                    return 1;
+                }
+
+                printf("Model size: %.1f GB (source: %s)\n",
+                       check.file_size_bytes / 1e9,
+                       check.size_source == SizeSource::HEAD_REQUEST ? "HTTP HEAD" : "metadata estimate");
+                printf("Required:   %.1f GB (with 15%% safety margin)\n",
+                       check.required_bytes / 1e9);
+                printf("Available:  %.1f GB on %s\n",
+                       check.available_bytes / 1e9, target_dir.c_str());
+                printf("Download:   %s\\%s\n\n", target_dir.c_str(), filename.c_str());
+
+                // Download the model (resumable, with progress)
+                printf("Downloading... (Ctrl+C to pause, re-run to resume)\n");
+                DownloadResult dl_result = download_model_file(
+                    model_url, target_dir, check.file_size_bytes, abort_requested);
+
+                if (dl_result.paused) {
+                    printf("\nDownload paused. Re-run to resume.\n");
+                    return 0;
+                }
+
+                if (!dl_result.success) {
+                    fprintf(stderr, "\nDownload failed: %s\n", dl_result.error_message.c_str());
+                    return 1;
+                }
+
+                model_path = dl_result.final_path;
+                printf("Model ready: %s\n\n", model_path.c_str());
             }
-
-            if (!dl_result.success) {
-                fprintf(stderr, "\nDownload failed: %s\n", dl_result.error_message.c_str());
-                return 1;
-            }
-
-            model_path = dl_result.final_path;
-            printf("Model ready: %s\n\n", model_path.c_str());
         }
     }
 

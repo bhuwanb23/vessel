@@ -59,6 +59,34 @@ struct HashVerifyResult {
     std::string error;              // error message if computation failed
 };
 
+// ---------------------------------------------------------------------------
+// Phase D: Multi-Shard Model Handling
+// ---------------------------------------------------------------------------
+
+// Information about a single shard
+struct ShardInfo {
+    int shard_index = 0;            // 1-based index (e.g., 1 of 5)
+    int total_shards = 0;           // total number of shards (e.g., 5)
+    std::string filename;           // full filename (e.g., "Model-00001-of-00005.gguf")
+    std::string base_name;          // base name without shard suffix (e.g., "Model")
+    std::string url;                // full download URL for this shard
+    uint64_t size_bytes = 0;        // shard size in bytes (from API)
+    std::string expected_sha256;    // expected hash (from API, may be empty)
+    bool downloaded = false;        // true if already on disk
+    bool verified = false;          // true if hash verified
+};
+
+// Complete model shard information
+struct ModelShards {
+    bool is_sharded = false;        // true if model is multi-shard
+    int total_shards = 0;           // total number of shards
+    uint64_t total_size_bytes = 0;  // sum of all shard sizes
+    std::string base_name;          // shared base name across shards
+    std::vector<ShardInfo> shards;  // individual shard info
+    std::string first_shard_path;   // path to shard 1 (for llama.cpp)
+    std::string error_message;      // error if detection failed
+};
+
 // =============================================================================
 // Public API — Phase A
 // =============================================================================
@@ -143,3 +171,34 @@ HashVerifyResult verify_file_integrity(const std::string& file_path,
 // Convert URL to HuggingFace API URL for fetching model metadata.
 // Extracts owner/repo from the download URL.
 std::string url_to_api_url(const std::string& download_url);
+
+// =============================================================================
+// Public API — Phase D: Multi-Shard Model Handling
+// =============================================================================
+
+// Check if a filename is a shard (matches *-NNNNN-of-MMMMM.gguf pattern).
+// Returns true and fills shard_index/total_shards if it matches.
+bool is_shard_filename(const std::string& filename, int& shard_index, int& total_shards);
+
+// Extract the base name from a shard filename.
+// "Llama-3.1-70B-Q4_K_M-00001-of-00005.gguf" → "Llama-3.1-70B-Q4_K_M"
+std::string shard_base_name(const std::string& filename);
+
+// Query HuggingFace API for all shards of a model.
+// Given any shard URL, finds all related shards in the same repo.
+// Returns ModelShards with all shard info populated.
+ModelShards detect_model_shards(const std::string& any_shard_url);
+
+// Check if all shards exist on disk.
+// Returns true if every shard file is present in download_dir.
+bool all_shards_present(const ModelShards& shards, const std::string& download_dir);
+
+// Get the path to the first shard (for llama.cpp).
+// llama.cpp discovers remaining shards from the same directory.
+std::string get_first_shard_path(const ModelShards& shards, const std::string& download_dir);
+
+// Download all shards sequentially.
+// Downloads each shard, verifies, then moves to next.
+// Returns true if ALL shards downloaded and verified successfully.
+bool download_all_shards(ModelShards& shards, const std::string& download_dir,
+                          std::atomic<bool>& abort_flag);
