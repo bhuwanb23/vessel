@@ -197,10 +197,18 @@ struct Prediction {
     uint64_t memory_vram_bytes = 0;
     uint64_t memory_ram_bytes = 0;
 
-    // Performance predictions
+    // Performance predictions (point estimates for dense models)
     double tokens_per_sec = 0.0;
     double ttft_ms = 0.0;
     double prompt_eval_tps = 0.0;
+    
+    // MoE range-based predictions (Step 9, Phase D)
+    // For MoE models, tokens_per_sec is a RANGE, not a point estimate
+    bool is_moe_range = false;          // true if this is an MoE range prediction
+    double tok_s_best = 0.0;           // Best case: all k active experts hit GPU (100% hit rate)
+    double tok_s_worst = 0.0;          // Worst case: all k active experts hit CPU (0% hit rate)
+    double tok_s_expected = 0.0;       // Expected: uniform routing probability
+    double gpu_hit_probability = 0.0;  // P(single token hits GPU expert) = E_gpu / N
     
     // Context analysis
     uint32_t max_safe_context = 0;
