@@ -60,6 +60,15 @@ ExecutionResult execute(const std::string& model_path,
                         int max_tokens = 100,
                         InferProgressCallback progress = nullptr);
 
+// Execute with MoE model metadata (enables tensor override generation)
+ExecutionResult execute_moe(const std::string& model_path,
+                            const StrategyConfig& strategy,
+                            const ModelSpec& model_metadata,
+                            const HardwareSpec& hw,
+                            const std::string& prompt,
+                            int max_tokens = 100,
+                            InferProgressCallback progress = nullptr);
+
 // Get CPU thread count (for n_threads parameter)
 int get_cpu_thread_count();
 

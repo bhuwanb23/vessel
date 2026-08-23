@@ -85,6 +85,7 @@ set(PLANNER_SOURCES
     src/planner/calibration_aggregator.cpp
     src/planner/download_manager.cpp
     src/planner/moe_placer.cpp
+    src/planner/moe_tensor_overrides.cpp
 )
 
 set(SHARED_INCLUDE_DIRS

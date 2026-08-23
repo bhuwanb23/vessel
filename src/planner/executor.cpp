@@ -1,5 +1,7 @@
 #include "executor.h"
 #include "hardware_sampler.h"
+#include "moe_placer.h"
+#include "moe_tensor_overrides.h"
 #include <llama.h>
 #include <ggml-backend.h>
 #include <cstdio>
@@ -56,7 +58,8 @@ static enum ggml_type kv_bits_to_ggml_type(uint32_t kv_bits) {
 // D2: Model Parameters
 // =============================================================================
 
-static llama_model_params make_model_params(const StrategyConfig& strategy) {
+static llama_model_params make_model_params(const StrategyConfig& strategy,
+                                             const MoETensorOverrides* moe_overrides = nullptr) {
     llama_model_params params = llama_model_default_params();
 
     // GPU layers: the most critical field
@@ -76,6 +79,18 @@ static llama_model_params make_model_params(const StrategyConfig& strategy) {
         params.load_mode = LLAMA_LOAD_MODE_MMAP;
     } else {
         params.load_mode = LLAMA_LOAD_MODE_AUTO;
+    }
+
+    // Apply MoE tensor overrides if available
+    if (moe_overrides && moe_overrides->needed) {
+        // Use tensor_split to control GPU/CPU weight distribution
+        // This is the primary mechanism for MoE expert offloading
+        params.tensor_split[0] = moe_overrides->tensor_split[0];
+        params.tensor_split[1] = moe_overrides->tensor_split[1];
+        
+        printf("  MoE tensor split: %.1f%% GPU, %.1f%% CPU\n",
+               moe_overrides->tensor_split[0] * 100.0f,
+               moe_overrides->tensor_split[1] * 100.0f);
     }
 
     return params;
