@@ -162,6 +162,9 @@ add_executable(executor_test
     src/planner/profiler.cpp
     src/planner/output.cpp
     src/planner/ranker.cpp
+    src/planner/moe_placer.cpp
+    src/planner/moe_tensor_overrides.cpp
+    src/planner/hardware_fingerprint.cpp
     ${PROFILER_SOURCES}
     ${PREDICTOR_SOURCES}
 )
@@ -177,6 +180,9 @@ add_executable(executor_phase_j_test
     src/planner/executor_phase_j_test.cpp
     src/planner/executor.cpp
     src/planner/hardware_sampler.cpp
+    src/planner/moe_placer.cpp
+    src/planner/moe_tensor_overrides.cpp
+    src/planner/hardware_fingerprint.cpp
     ${PROFILER_SOURCES}
     ${PREDICTOR_SOURCES}
 )
@@ -205,6 +211,7 @@ target_link_libraries(calibration_log_test PRIVATE winhttp)
 # ============================================
 add_executable(predictor_test
     src/predictor/predictor_test.cpp
+    src/planner/moe_placer.cpp
     ${PREDICTOR_SOURCES}
 )
 
