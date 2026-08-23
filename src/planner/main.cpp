@@ -365,16 +365,23 @@ int main(int argc, char* argv[]) {
                    check.available_bytes / 1e9, target_dir.c_str());
             printf("Download:   %s\\%s\n\n", target_dir.c_str(), filename.c_str());
 
-            // TODO: Phase B will add the actual download here
-            // For now, tell the user to download manually
-            fprintf(stderr, "Download not yet implemented in this phase.\n");
-            fprintf(stderr, "Download manually with:\n");
-            fprintf(stderr, "  curl -L -o \"%s\\%s\" \"%s\"\n",
-                    target_dir.c_str(), filename.c_str(), model_url.c_str());
-            fprintf(stderr, "\nThen re-run with:\n");
-            fprintf(stderr, "  llm-planner --model \"%s\" --model-path \"%s\\%s\" --execute\n",
-                    model_url.c_str(), target_dir.c_str(), filename.c_str());
-            return 0;
+            // Download the model (resumable, with progress)
+            printf("Downloading... (Ctrl+C to pause, re-run to resume)\n");
+            DownloadResult dl_result = download_model_file(
+                model_url, target_dir, check.file_size_bytes, abort_requested);
+
+            if (dl_result.paused) {
+                printf("\nDownload paused. Re-run to resume.\n");
+                return 0;
+            }
+
+            if (!dl_result.success) {
+                fprintf(stderr, "\nDownload failed: %s\n", dl_result.error_message.c_str());
+                return 1;
+            }
+
+            model_path = dl_result.final_path;
+            printf("Model ready: %s\n\n", model_path.c_str());
         }
     }
 
