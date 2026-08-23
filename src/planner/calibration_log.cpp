@@ -284,6 +284,15 @@ bool json_to_record(const std::string& json, CalibrationRecord& record) {
         if (!v.empty()) record.actual_tokens_generated = std::stoi(v);
         v = find_json_value(actual_json, "duration_sec");
         if (!v.empty()) record.actual_duration_sec = std::stod(v);
+        // MoE-specific actual telemetry (Step 9, Phase E)
+        v = find_json_value(actual_json, "tokens_per_sec_min");
+        if (!v.empty()) record.actual_tokens_per_sec_min = std::stod(v);
+        v = find_json_value(actual_json, "tokens_per_sec_max");
+        if (!v.empty()) record.actual_tokens_per_sec_max = std::stod(v);
+        v = find_json_value(actual_json, "pcie_throughput_mbs");
+        if (!v.empty()) record.actual_pcie_throughput_mbs = std::stoull(v);
+        v = find_json_value(actual_json, "token_time_variance");
+        if (!v.empty()) record.actual_token_time_variance = std::stod(v);
     }
 
     return true;
@@ -314,6 +323,15 @@ CalibrationRecord make_record(
     r.gpu_layers = strategy.gpu_layers;
     r.context = strategy.context_length;
     r.kv_quant_bits = strategy.kv_quant_bits;
+    // MoE-specific strategy fields (Step 9, Phase E)
+    if (prediction.is_moe_range) {
+        // For MoE, compute experts from the placement plan
+        // The strategy.gpu_layers is set to model.layers for MoE Expert Offload
+        // but we need to store actual expert counts
+        r.gpu_experts_per_layer = (model.expert_count > 0) ? 
+            (uint32_t)(prediction.gpu_hit_probability * model.expert_count + 0.5) : 0;
+        r.total_experts_per_layer = model.expert_count;
+    }
 
     // Predicted
     r.predicted_tokens_per_sec = prediction.tokens_per_sec;
@@ -323,8 +341,14 @@ CalibrationRecord make_record(
     switch (prediction.confidence) {
         case PredictionConfidence::HIGH:   r.predicted_confidence = "HIGH";   break;
         case PredictionConfidence::MEDIUM: r.predicted_confidence = "MEDIUM"; break;
-        case PredictionConfidence::LOW:    r.predicted_confidence = "LOW";    break;
-        default: r.predicted_confidence = "LOW"; break;
+        case PredictionConfidence::LOW:    r.predicted_confidence = prediction.is_moe_range ? "LOW_MOE" : "LOW";
+        default: r.predicted_confidence = prediction.is_moe_range ? "LOW_MOE" : "LOW"; break;
+    }
+    // MoE-specific predicted ranges (Step 9, Phase D)
+    if (prediction.is_moe_range) {
+        r.predicted_tokens_per_sec_min = prediction.tok_s_worst;
+        r.predicted_tokens_per_sec_max = prediction.tok_s_best;
+        r.predicted_tokens_per_sec_expected = prediction.tok_s_expected;
     }
 
     // Actual
