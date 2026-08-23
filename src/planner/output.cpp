@@ -145,9 +145,18 @@ void print_hardware_brief(const HardwareSpec& hw) {
 }
 
 void print_model_brief(const ModelSpec& model) {
-    printf("Model:    %s %s | %.2fB params | %u layers | %uK max context\n",
-           model.name.c_str(), model.quant_type.c_str(),
-           model.param_count / 1e9, model.layers, model.context_length / 1024);
+    if (model.is_moe) {
+        printf("Model:    %s %s | %.2fB total (%.2fB active) | %u layers | %uK max context"
+               " | MoE %u\u00D7%.0f\n",
+               model.name.c_str(), model.quant_type.c_str(),
+               model.param_count / 1e9, model.params_active_per_token / 1e9,
+               model.layers, model.context_length / 1024,
+               model.expert_count, (double)model.expert_used_count);
+    } else {
+        printf("Model:    %s %s | %.2fB params | %u layers | %uK max context\n",
+               model.name.c_str(), model.quant_type.c_str(),
+               model.param_count / 1e9, model.layers, model.context_length / 1024);
+    }
 }
 
 // =============================================================================
@@ -184,6 +193,26 @@ void print_model_full(const ModelSpec& model) {
            model.bits_per_weight);
     printf("Source:           %s\n",
            model.source == MetadataSource::GGUF_HEADER ? "GGUF Header" : "config.json");
+    
+    // Debug: dump raw GGUF UINT32 keys
+    if (!model.raw_kv_uint32.empty()) {
+        printf("\n--- Raw GGUF UINT32 Keys (debug) ---\n");
+        for (const auto& [k, v] : model.raw_kv_uint32) {
+            printf("  %-50s = %u\n", k.c_str(), v);
+        }
+    }
+    
+    if (model.is_moe) {
+        printf("\n--- MoE Architecture ---\n");
+        printf("Total Experts:    %u (routed) + %u (shared)\n",
+               model.expert_count, model.expert_shared_count);
+        printf("Active/Token:     %u\n", model.expert_used_count);
+        printf("Expert FFN Dim:   %u\n", model.expert_ffn_dim);
+        printf("Params/Expert:    %.2fB\n", model.params_per_routed_expert / 1e9);
+        printf("Routed Params:    %.2fB\n", model.params_routed_total / 1e9);
+        printf("Shared Params:    %.2fB\n", model.params_shared / 1e9);
+        printf("Active/Token:     %.2fB\n", model.params_active_per_token / 1e9);
+    }
 }
 
 // =============================================================================

@@ -184,6 +184,21 @@ bool parse_gguf_header(const uint8_t* data, size_t data_size, ModelMetadata& met
                 } else if (key.find(".feed_forward_length") != std::string::npos) {
                     metadata.feed_forward_length = value;
                 }
+                // MoE-specific UINT32 keys
+                else if (key.find(".expert_count") != std::string::npos) {
+                    metadata.expert_count = value;
+                    metadata.is_moe = true;
+                } else if (key.find(".expert_used_count") != std::string::npos) {
+                    metadata.expert_used_count = value;
+                } else if (key.find(".expert_shared_count") != std::string::npos) {
+                    metadata.expert_shared_count = value;
+                } else if (key.find(".expert_feed_forward_length") != std::string::npos) {
+                    metadata.expert_ffn_dim = value;
+                }
+                // Store all UINT32 keys for debugging
+                metadata.raw_kv_uint32[key] = value;
+                break;
+                metadata.raw_kv_uint32[key] = value;
                 break;
             }
             case 10: { // UINT64
@@ -203,6 +218,8 @@ bool parse_gguf_header(const uint8_t* data, size_t data_size, ModelMetadata& met
 
                 if (key.find(".layer_norm_rms_epsilon") != std::string::npos) {
                     metadata.layer_norm_rms_epsilon = value;
+                } else if (key.find(".expert_weights_scale") != std::string::npos) {
+                    metadata.expert_weights_scale = value;
                 }
                 break;
             }
@@ -231,5 +248,9 @@ bool parse_gguf_header(const uint8_t* data, size_t data_size, ModelMetadata& met
     }
 
 done:
+    // Post-processing: for MoE models, feed_forward_length IS the expert FFN dim
+    if (metadata.is_moe && metadata.expert_ffn_dim == 0 && metadata.feed_forward_length > 0) {
+        metadata.expert_ffn_dim = metadata.feed_forward_length;
+    }
     return !metadata.architecture.empty() || !metadata.name.empty();
 }

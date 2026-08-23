@@ -113,8 +113,19 @@ ModelSpec fetch_gguf_metadata(const std::string& file_path) {
     model.bits_per_weight = get_bits_per_weight(metadata.file_type);
     model.source = MetadataSource::GGUF_HEADER;
     
+    // MoE fields
+    model.is_moe = metadata.is_moe;
+    model.expert_count = metadata.expert_count;
+    model.expert_used_count = metadata.expert_used_count;
+    model.expert_shared_count = metadata.expert_shared_count;
+    model.expert_ffn_dim = metadata.expert_ffn_dim;
+    model.expert_weights_scale = metadata.expert_weights_scale;
+    if (model.is_moe) model.model_type = ModelType::MOE;
+    model.raw_kv_uint32 = metadata.raw_kv_uint32;
+    
     // Estimate parameters if not provided in GGUF
     model.estimate_parameters();
+    model.calculate_moe_parameters();
     
     return model;
 }
@@ -145,8 +156,19 @@ ModelSpec fetch_gguf_metadata_from_url(const std::string& url) {
     model.bits_per_weight = get_bits_per_weight(metadata.file_type);
     model.source = MetadataSource::GGUF_HEADER;
     
+    // MoE fields
+    model.is_moe = metadata.is_moe;
+    model.expert_count = metadata.expert_count;
+    model.expert_used_count = metadata.expert_used_count;
+    model.expert_shared_count = metadata.expert_shared_count;
+    model.expert_ffn_dim = metadata.expert_ffn_dim;
+    model.expert_weights_scale = metadata.expert_weights_scale;
+    if (model.is_moe) model.model_type = ModelType::MOE;
+    model.raw_kv_uint32 = metadata.raw_kv_uint32;
+    
     // Estimate parameters if not provided in GGUF
     model.estimate_parameters();
+    model.calculate_moe_parameters();
     
     return model;
 }

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // =============================================================================
@@ -98,6 +99,23 @@ struct ModelSpec {
     uint32_t kv_lora_rank = 0;           // MLA KV compression rank
     uint32_t qk_rope_head_dim = 0;      // MLA rope head dimension
     
+    // MoE-specific fields
+    bool is_moe = false;                 // true if architecture is MoE
+    uint32_t expert_count = 0;           // Total routed experts per layer (N)
+    uint32_t expert_used_count = 0;      // Active routed experts per token (k)
+    uint32_t expert_shared_count = 0;    // Number of shared experts (always active)
+    uint32_t expert_ffn_dim = 0;         // FFN intermediate dimension per expert
+    float expert_weights_scale = 1.0f;   // Routing score scaling factor
+    
+    // MoE derived parameters (calculated from above)
+    uint64_t params_per_routed_expert = 0;  // Parameters in one routed expert
+    uint64_t params_routed_total = 0;        // Total routed expert parameters
+    uint64_t params_shared = 0;              // Shared parameters (attention, embed, etc.)
+    uint64_t params_active_per_token = 0;    // Active parameters per token
+    
+    // Raw GGUF metadata for debugging
+    std::unordered_map<std::string, uint32_t> raw_kv_uint32;
+
     // Derived helpers
     uint32_t get_kv_ratio() const {
         return (kv_heads > 0) ? (attention_heads / kv_heads) : 1;
@@ -113,6 +131,44 @@ struct ModelSpec {
 
         uint64_t per_layer = (2 * emb * emb) + (2 * emb * emb / kv_ratio) + (3 * ffn * emb);
         param_count = static_cast<uint64_t>(layers) * per_layer + (2 * emb * emb);
+    }
+
+    // Calculate MoE parameter breakdown
+    // Call after setting MoE fields from GGUF parser
+    void calculate_moe_parameters() {
+        if (!is_moe || expert_count == 0 || embedding_dim == 0 || layers == 0) return;
+        
+        // Each routed expert has Gate, Up, Down projections
+        // params_per_expert = 3 × embedding_dim × expert_ffn_dim
+        uint32_t ffn = (expert_ffn_dim > 0) ? expert_ffn_dim : embedding_dim * 4;
+        params_per_routed_expert = 3ULL * embedding_dim * ffn;
+        
+        // Total routed expert parameters across all layers
+        params_routed_total = static_cast<uint64_t>(expert_count) * params_per_routed_expert * layers;
+        
+        // Shared parameters: attention, embeddings, norms, router
+        // Estimate from dense transformer formula (Q/K/V + O projections per layer)
+        uint32_t kv_ratio = get_kv_ratio();
+        uint64_t attention_per_layer = 2ULL * embedding_dim * embedding_dim  // Q, O
+            + 2ULL * embedding_dim * embedding_dim / kv_ratio;               // K, V (GQA)
+        uint64_t shared_per_layer = attention_per_layer;  // + norms (negligible)
+        uint64_t embedding_params = 2ULL * embedding_dim * embedding_dim;    // input + output embeddings
+        uint64_t estimated_shared = static_cast<uint64_t>(layers) * shared_per_layer + embedding_params;
+        
+        // Use GGUF param_count if it's larger than routed alone (reliable)
+        // Otherwise use our estimate
+        if (param_count > params_routed_total) {
+            params_shared = param_count - params_routed_total;
+        } else {
+            // GGUF param_count may be wrong for MoE — use estimate
+            params_shared = estimated_shared;
+            // Recalculate total param_count from components
+            param_count = params_shared + params_routed_total;
+        }
+        
+        // Active parameters per token = shared + (k × per_expert × layers)
+        params_active_per_token = params_shared +
+            static_cast<uint64_t>(expert_used_count) * params_per_routed_expert * layers;
     }
 };
 

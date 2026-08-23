@@ -40,8 +40,17 @@ struct ModelMetadata {
     uint32_t feed_forward_length = 0;
     float layer_norm_rms_epsilon = 0.0f;
 
+    // MoE-specific fields (populated for MoE architectures)
+    bool is_moe = false;               // true if architecture is MoE
+    uint32_t expert_count = 0;         // Total routed experts per layer (N)
+    uint32_t expert_used_count = 0;    // Active routed experts per token (k)
+    uint32_t expert_shared_count = 0;  // Number of shared experts (always active)
+    uint32_t expert_ffn_dim = 0;       // FFN intermediate dimension per expert
+    float expert_weights_scale = 1.0f; // Routing score scaling factor
+
     // Raw metadata for debugging
     std::unordered_map<std::string, std::string> raw_kv_strings;
+    std::unordered_map<std::string, uint32_t> raw_kv_uint32;
 };
 
 // Parse GGUF header from raw bytes
