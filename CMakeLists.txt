@@ -82,6 +82,7 @@ set(PLANNER_SOURCES
     src/planner/comparison_report.cpp
     src/planner/hardware_fingerprint.cpp
     src/planner/calibration_log.cpp
+    src/planner/calibration_aggregator.cpp
 )
 
 set(SHARED_INCLUDE_DIRS

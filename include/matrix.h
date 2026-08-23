@@ -3,6 +3,9 @@
 #include "types.h"
 #include <vector>
 
+// Forward declare
+struct CalibrationData;
+
 // =============================================================================
 // Method Matrix Generator (Phase B)
 // =============================================================================
@@ -13,8 +16,12 @@
 //   3. KV Cache Precision: FP16 (16 bits), Q8 (8 bits)
 // =============================================================================
 
-// Generate all viable strategies (main entry point)
+// Generate all viable strategies (no calibration)
 std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelSpec& model);
+
+// Generate with calibrated predictions (Step 7)
+std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelSpec& model,
+                                            const CalibrationData& cal);
 
 // Format strategy for display
 std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers);
