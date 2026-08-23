@@ -83,6 +83,7 @@ set(PLANNER_SOURCES
     src/planner/hardware_fingerprint.cpp
     src/planner/calibration_log.cpp
     src/planner/calibration_aggregator.cpp
+    src/planner/download_manager.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
