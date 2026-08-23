@@ -3,6 +3,7 @@
 #include "../predictor/predictor.h"
 #include "../predictor/memory_predictor.h"
 #include "../predictor/context_analyzer.h"
+#include "../../include/moe_predictor.h"
 #include "calibration_aggregator.h"
 #include <algorithm>
 #include <sstream>
@@ -253,16 +254,25 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     strat.kv_quant_bits = kv_bits;
                     
                     Prediction pred = predict(hw, model, strat, cal);
-                    // Debug: show MoE range
-                    if (pred.is_moe_range) {
-                        fprintf(stderr, "  [MoE-Offload] range: %.1f - %.1f (expected %.1f) tok/s\n",
-                                pred.tok_s_worst, pred.tok_s_best, pred.tok_s_expected);
-                    }
                     // Override memory with MoE plan values
                     pred.memory_vram_bytes = plan.total_vram_bytes;
                     pred.memory_ram_bytes = plan.total_ram_bytes;
                     pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
                     pred.viable = plan.viable;
+                    
+                    // Compute MoE range prediction
+                    if (plan.viable && plan.gpu_experts_per_layer > 0
+                        && plan.gpu_experts_per_layer < model.expert_count) {
+                        MoEPrediction moe_pred = predictMoERange(hw, model, plan, kv_bits);
+                        if (moe_pred.valid) {
+                            pred.is_moe_range = true;
+                            pred.tok_s_best = moe_pred.tok_s_best;
+                            pred.tok_s_worst = moe_pred.tok_s_worst;
+                            pred.tok_s_expected = moe_pred.tok_s_expected;
+                            pred.gpu_hit_probability = moe_pred.p_gpu;
+                            pred.tokens_per_sec = moe_pred.tok_s_expected;
+                        }
+                    }
                     
                     StrategyResult result;
                     result.strategy = strat;
