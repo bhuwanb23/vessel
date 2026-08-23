@@ -20,6 +20,7 @@
 #include "output.h"
 #include "executor.h"
 #include "comparison_report.h"
+#include "calibration_log.h"
 #include "../predictor/predictor.h"
 
 #include <cstdio>
@@ -338,6 +339,19 @@ int main(int argc, char* argv[]) {
     // Print comparison report
     Prediction prediction = predict(hw, model, strat);
     print_comparison_report(prediction, result, strat);
+
+    // Write calibration log (Phase C)
+    // Model ID: extract from URL or use filename
+    std::string model_id;
+    {
+        auto pos = model_url.find_last_of('/');
+        if (pos != std::string::npos) {
+            model_id = model_url.substr(pos + 1);  // filename only
+        } else {
+            model_id = model_url;
+        }
+    }
+    write_calibration_entry(hw, model, strat, prediction, result, model_id);
 
     // Shutdown
     executor_shutdown();

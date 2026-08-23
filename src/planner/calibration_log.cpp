@@ -2,6 +2,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shlobj.h>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -374,4 +375,71 @@ int count_records_for_hardware(const std::string& fingerprint,
         }
     }
     return count;
+}
+
+// =============================================================================
+// Platform-Specific Log Path
+// =============================================================================
+
+std::string get_log_path() {
+    // Try %APPDATA%\llm-planner\calibration.jsonl
+    char appdata[MAX_PATH] = {};
+    HRESULT hr = SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appdata);
+    if (SUCCEEDED(hr) && appdata[0] != '\0') {
+        std::string dir = std::string(appdata) + "\\llm-planner";
+
+        // Create directory if it doesn't exist
+        CreateDirectoryA(dir.c_str(), NULL);  // succeeds if already exists
+
+        return dir + "\\calibration.jsonl";
+    }
+
+    // Fallback: next to executable
+    char exe_path[MAX_PATH] = {};
+    GetModuleFileNameA(NULL, exe_path, MAX_PATH);
+    std::string path(exe_path);
+    auto pos = path.find_last_of('\\');
+    if (pos != std::string::npos) {
+        path = path.substr(0, pos + 1) + "calibration.jsonl";
+    } else {
+        path = "calibration.jsonl";
+    }
+    return path;
+}
+
+// =============================================================================
+// High-Level Write Entry (Phase C)
+// =============================================================================
+
+bool write_calibration_entry(
+    const HardwareSpec& hw,
+    const ModelSpec& model,
+    const StrategyConfig& strategy,
+    const Prediction& prediction,
+    const ExecutionResult& result,
+    const std::string& model_id)
+{
+    // Validation: skip if run was not meaningful
+    if (result.tokens_generated < 10) {
+        // Don't warn — this is expected for short benchmark runs
+        return false;
+    }
+
+    // Get the platform-specific log path
+    std::string log_path = get_log_path();
+
+    // Create the record
+    CalibrationRecord record = make_record(hw, model, strategy, prediction, result, model_id);
+
+    // Try to append
+    if (!append_record(record, log_path)) {
+        fprintf(stderr, "\nWarning: Could not write calibration log to: %s\n",
+                log_path.c_str());
+        fprintf(stderr, "   Execution results are still valid.\n");
+        return false;
+    }
+
+    // Success — print path in verbose mode
+    printf("Calibration record saved to: %s\n", log_path.c_str());
+    return true;
 }

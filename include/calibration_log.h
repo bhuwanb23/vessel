@@ -19,8 +19,13 @@
 // Tool version — increment when formulas/constants change
 static const char* CALIBRATION_TOOL_VERSION = "0.1.0";
 
-// Default log file path
+// Default log file path (relative, for testing)
 static const char* CALIBRATION_LOG_FILE = "calibration_log.jsonl";
+
+// Get the platform-specific log file path.
+// Windows: %APPDATA%\llm-planner\calibration.jsonl
+// Fallback: ./calibration_log.jsonl
+std::string get_log_path();
 
 // =============================================================================
 // Calibration Record — matches the locked JSON schema from §7
@@ -92,6 +97,19 @@ std::vector<CalibrationRecord> read_all_records(
 // Count records matching a specific hardware fingerprint.
 int count_records_for_hardware(const std::string& fingerprint,
                                const std::string& log_path = CALIBRATION_LOG_FILE);
+
+// High-level convenience: create record from run results and append to log.
+// Handles directory creation, error messages, and validation.
+// Returns true on success, false on write error (warning printed).
+// Does NOT fail the run — the execution results are still valid.
+bool write_calibration_entry(
+    const HardwareSpec& hw,
+    const ModelSpec& model,
+    const StrategyConfig& strategy,
+    const Prediction& prediction,
+    const ExecutionResult& result,
+    const std::string& model_id
+);
 
 // =============================================================================
 // JSON Serialization (internal, exposed for testing)
