@@ -28,6 +28,7 @@
 #include <string>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 
 // Timer utility
 class Timer {
@@ -84,16 +85,18 @@ int main(int argc, char* argv[]) {
             } else {
                 // Find a model file for NVMe detection in fingerprint
                 std::string model_for_fingerprint;
-                const char* search_dirs[] = {"models/", "../models/", "./models/", "C:/dev/models/"};
-                for (const char* dir : search_dirs) {
-                    // Search for any .gguf file
-                    WIN32_FIND_DATAA find_data;
-                    std::string pattern = std::string(dir) + "*.gguf";
-                    HANDLE hFind = FindFirstFileA(pattern.c_str(), &find_data);
-                    if (hFind != INVALID_HANDLE_VALUE) {
-                        model_for_fingerprint = std::string(dir) + find_data.cFileName;
-                        FindClose(hFind);
-                        break;
+                {
+                    // Try common model directories for any .gguf file
+                    std::ifstream test;
+                    const char* candidates[] = {
+                        "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                        "../models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                        "./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                        "C:/dev/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                    };
+                    for (const char* c : candidates) {
+                        test.open(c);
+                        if (test.is_open()) { model_for_fingerprint = c; test.close(); break; }
                     }
                 }
                 HardwareSpec hw_tmp = profile_hardware(model_for_fingerprint);
