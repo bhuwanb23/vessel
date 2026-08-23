@@ -162,6 +162,16 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Could not delete %s\n", log_path.c_str());
             }
             return 0;
+        } else if (arg == "--profile-neurons") {
+            profile_neurons = true;
+        } else if (arg == "--hot-ratio" && i + 1 < argc) {
+            hot_ratio = atof(argv[++i]);
+            if (hot_ratio <= 0.0 || hot_ratio > 1.0) hot_ratio = 0.15;
+        } else if (arg == "--vram-budget" && i + 1 < argc) {
+            // Accept as GB string (e.g., "4GB" or "4")
+            std::string val = argv[++i];
+            double gb = atof(val.c_str());
+            vram_budget = static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
         } else if (arg == "--model" && i + 1 < argc) {
             model_url = argv[++i];
             model_specified = true;
