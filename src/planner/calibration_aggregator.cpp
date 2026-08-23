@@ -29,9 +29,11 @@ CalibrationAggregator::CalibrationAggregator(
     std::vector<CalibrationRecord> all_records = read_all_records(log_path);
     total_records_ = static_cast<int>(all_records.size());
 
-    // Step D2: Filter by hardware fingerprint
+    // Step D2: Filter by hardware fingerprint AND tool version
+    // Skip entries from older tool versions (formulas may have changed)
     for (const auto& record : all_records) {
-        if (record.hardware_fingerprint == hardware_fingerprint) {
+        if (record.hardware_fingerprint == hardware_fingerprint
+            && record.tool_version == CALIBRATION_TOOL_VERSION) {
             matching_records_.push_back(record);
         }
     }
