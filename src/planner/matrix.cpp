@@ -4,6 +4,8 @@
 #include "../predictor/memory_predictor.h"
 #include "../predictor/context_analyzer.h"
 #include "../../include/moe_predictor.h"
+#include "../../include/hotcold/hotcold_predictor.h"
+#include "../../include/hotcold/hotcold_types.h"
 #include "calibration_aggregator.h"
 #include <algorithm>
 #include <sstream>
@@ -17,6 +19,21 @@
 //   2. Context Length: 4K, max-safe
 //   3. KV Cache Precision: FP16 (16 bits), Q8 (8 bits)
 // =============================================================================
+
+// Estimate layer weight bytes for layer-streaming fallback
+static uint64_t estimate_layer_weight_bytes_helper(
+    uint32_t hidden_dim, uint32_t ffn_dim,
+    uint32_t attention_heads, uint32_t kv_heads,
+    double bytes_per_param)
+{
+    uint32_t kv_dim = kv_heads * (hidden_dim / attention_heads);
+    uint64_t attention_params =
+        static_cast<uint64_t>(hidden_dim) * hidden_dim * 2 +   // Q, O
+        static_cast<uint64_t>(hidden_dim) * kv_dim * 2;        // K, V
+    uint64_t ffn_params = 3ULL * static_cast<uint64_t>(hidden_dim) * ffn_dim;
+    uint64_t norm_params = 2 * hidden_dim;
+    return static_cast<uint64_t>((attention_params + ffn_params + norm_params) * bytes_per_param);
+}
 
 // Calculate maximum layers that fit in VRAM
 static uint32_t calculate_max_fit_layers(const HardwareSpec& hw, const ModelSpec& model, uint32_t context_length) {
@@ -372,6 +389,128 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     result.description = oss.str();
                     
                     all_strategies.push_back(result);
+                }
+            }
+        }
+    }
+    
+    // =========================================================================
+    // Hot/Cold CPU-GPU Offload Strategies (Step 10)
+    // =========================================================================
+    // For dense models that are too large to fit entirely on GPU,
+    // add hot/cold neuron offload strategies:
+    //   1. Hot/Cold Split: Hot neurons on GPU, cold neurons on CPU
+    //   2. Layer-Streaming: Stream layers from disk (extreme fallback)
+    // =========================================================================
+    if (!is_moe_model(model)) {
+        // Only generate hot/cold for dense models that don't fit entirely on GPU
+        uint64_t total_model_bytes = predict_weight_memory(model);
+        bool fits_entirely = (total_model_bytes + 512ULL * 1024 * 1024) <= hw.vram_free_bytes;
+        
+        if (!fits_entirely && model.ffn_dim > 0 && model.embedding_dim > 0) {
+            // Build a minimal hot neuron profile for strategy generation
+            HotNeuronProfile profile;
+            profile.model_name = model.name;
+            profile.activation = ActivationType::SILU;  // Most modern models use SiLU
+            profile.num_layers = model.layers;
+            profile.ffn_dim = model.ffn_dim;
+            profile.hidden_dim = model.embedding_dim;
+            profile.hot_ratio = 0.15;  // 15% hot neurons
+            
+            for (uint32_t ctx : contexts) {
+                for (uint32_t kv_bits : kv_quants) {
+                    if (ctx > model.context_length) continue;
+                    
+                    // Strategy: Hot/Cold Split
+                    {
+                        HotColdStrategy hc = compute_hotcold_strategy(
+                            hw, model, profile, ctx, kv_bits, 0.15);
+                        
+                        if (hc.viable) {
+                            HotColdMemoryResult mem = predict_hotcold_memory(
+                                hw, model, hc, ctx, kv_bits);
+                            HotColdSpeedResult speed = predict_hotcold_speed(
+                                hw, model, hc, kv_bits);
+                            
+                            StrategyConfig strat;
+                            strat.placement = PlacementStrategy::GPU_CPU_SPLIT;
+                            strat.gpu_layers = model.layers;  // All layers, but split neurons within
+                            strat.context_length = ctx;
+                            strat.batch_size = 1;
+                            strat.kv_quant_bits = kv_bits;
+                            
+                            Prediction pred = predict(hw, model, strat, cal);
+                            pred.memory_vram_bytes = mem.vram_bytes;
+                            pred.memory_ram_bytes = mem.ram_bytes;
+                            pred.memory_total_bytes = mem.vram_bytes + mem.ram_bytes;
+                            pred.viable = mem.viable;
+                            
+                            // Hot/cold range prediction
+                            pred.is_moe_range = true;  // Reuse range display
+                            pred.tok_s_best = speed.tok_s_best;
+                            pred.tok_s_worst = speed.tok_s_worst;
+                            pred.tok_s_expected = speed.tok_s_expected;
+                            pred.tokens_per_sec = speed.tok_s_expected;
+                            
+                            StrategyResult result;
+                            result.strategy = strat;
+                            result.prediction = pred;
+                            
+                            std::ostringstream oss;
+                            oss << "Hot/Cold " << hc.hot_neurons_per_layer << "/" << model.ffn_dim
+                                << " neurons on GPU";
+                            oss << " (ctx=" << ctx;
+                            if (kv_bits == 8) oss << ", KV=Q8";
+                            oss << ")";
+                            result.description = oss.str();
+                            
+                            all_strategies.push_back(result);
+                        }
+                    }
+                    
+                    // Strategy: Layer-Streaming Fallback
+                    // Always viable (extreme fallback), but very slow
+                    {
+                        double estimated_tok_s = 0.0;
+                        if (hw.nvme_sequential_mbs > 0) {
+                            // Rough estimate: one layer = ~200MB for 7B model
+                            // Streaming 28 layers = 28 * (200MB / NVMe_speed) + compute time
+                            uint64_t layer_bytes = estimate_layer_weight_bytes_helper(
+                                model.embedding_dim, model.ffn_dim,
+                                model.attention_heads, model.kv_heads > 0 ? model.kv_heads : model.attention_heads,
+                                model.bits_per_weight / 8.0);
+                            double layer_mb = static_cast<double>(layer_bytes) / (1024.0 * 1024.0);
+                            double time_per_layer_ms = (layer_mb / hw.nvme_sequential_mbs) * 1000.0;
+                            // Add GPU compute time per layer (~5ms for 7B)
+                            time_per_layer_ms += 5.0;
+                            double total_ms = time_per_layer_ms * model.layers;
+                            estimated_tok_s = (total_ms > 0) ? 1000.0 / total_ms : 0.0;
+                        }
+                        
+                        StrategyConfig strat;
+                        strat.placement = PlacementStrategy::CPU_ONLY;
+                        strat.gpu_layers = 0;
+                        strat.context_length = ctx;
+                        strat.batch_size = 1;
+                        strat.kv_quant_bits = kv_bits;
+                        
+                        Prediction pred = predict(hw, model, strat, cal);
+                        pred.tokens_per_sec = estimated_tok_s;
+                        pred.viable = (estimated_tok_s > 0);
+                        
+                        StrategyResult result;
+                        result.strategy = strat;
+                        result.prediction = pred;
+                        
+                        std::ostringstream oss;
+                        oss << "Layer-Stream (extreme fallback)";
+                        oss << " (ctx=" << ctx;
+                        if (kv_bits == 8) oss << ", KV=Q8";
+                        oss << ")";
+                        result.description = oss.str();
+                        
+                        all_strategies.push_back(result);
+                    }
                 }
             }
         }

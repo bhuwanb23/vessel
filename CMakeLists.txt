@@ -89,6 +89,15 @@ set(PLANNER_SOURCES
     src/planner/moe_tensor_overrides.cpp
 )
 
+# Step 10: Hot/Cold CPU-GPU Offload
+set(HOTCOLD_SOURCES
+    src/hotcold/profiler.cpp
+    src/hotcold/weight_splitter.cpp
+    src/hotcold/sparse_ffn.cpp
+    src/hotcold/layer_streamer.cpp
+    src/hotcold/hotcold_predictor.cpp
+)
+
 set(SHARED_INCLUDE_DIRS
     include
     src/profiler
@@ -119,6 +128,7 @@ add_executable(llm-planner
     ${PROFILER_SOURCES}
     ${FETCHER_SOURCES}
     ${PREDICTOR_SOURCES}
+    ${HOTCOLD_SOURCES}
 )
 
 target_include_directories(llm-planner PRIVATE ${SHARED_INCLUDE_DIRS})
@@ -134,6 +144,7 @@ add_executable(e2e_test
     ${PROFILER_SOURCES}
     ${FETCHER_SOURCES}
     ${PREDICTOR_SOURCES}
+    ${HOTCOLD_SOURCES}
 )
 
 target_include_directories(e2e_test PRIVATE ${SHARED_INCLUDE_DIRS})
