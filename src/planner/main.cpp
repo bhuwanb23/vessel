@@ -51,6 +51,9 @@ static const char* DEFAULT_PROMPT =
 // =============================================================================
 
 int main(int argc, char* argv[]) {
+    // Phase H: Register Ctrl+C handler for graceful abort
+    register_abort_handler();
+
     // --- Parse CLI arguments ---
     std::string model_url;       // URL or path from --model
     std::string model_local;     // Local path from --model-path

@@ -4,6 +4,7 @@
 #include <string>
 #include <functional>
 #include <vector>
+#include <atomic>
 
 // =============================================================================
 // Step 6 — Executor: llama.cpp Integration
@@ -61,3 +62,16 @@ ExecutionResult execute(const std::string& model_path,
 
 // Get CPU thread count (for n_threads parameter)
 int get_cpu_thread_count();
+
+// =============================================================================
+// Graceful Abort — Ctrl+C handling
+// =============================================================================
+// Set by signal handler, checked by decode loop every iteration.
+// Never call exit() — clean up llama.cpp resources first.
+extern std::atomic<bool> abort_requested;
+
+// Register Ctrl+C handler (call once at program start)
+void register_abort_handler();
+
+// Check if abort was requested (used in decode loop)
+bool is_abort_requested();

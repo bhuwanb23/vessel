@@ -129,8 +129,14 @@ ExecutionResult execute(const std::string& model_path,
         model_path.c_str(), model_params);
 
     if (!model) {
-        result.error_message = "Failed to load model from: " + model_path
-            + " (check file exists and VRAM/RAM is sufficient)";
+        result.error_message = "Failed to load model from: " + model_path + "\n"
+            "  Possible causes:\n"
+            "  1. File does not exist or is corrupted\n"
+            "  2. Not enough VRAM/RAM for requested n_gpu_layers ("
+            + std::to_string(strategy.gpu_layers) + " layers)\n"
+            "  3. GGUF version mismatch with this llama.cpp build\n"
+            "  Try: reduce --model gpu_layers, close other GPU apps, "
+            "or use a smaller model.";
         return result;
     }
 
@@ -142,8 +148,13 @@ ExecutionResult execute(const std::string& model_path,
     struct llama_context* ctx = llama_init_from_model(model, ctx_params);
 
     if (!ctx) {
-        result.error_message = "Failed to create inference context"
-            " (VRAM/RAM may be insufficient for requested context length)";
+        result.error_message = "Failed to create inference context\n"
+            "  Possible causes:\n"
+            "  1. Not enough VRAM/RAM for context length "
+            + std::to_string(strategy.context_length) + " with "
+            + std::to_string(strategy.kv_quant_bits) + "-bit KV cache\n"
+            "  2. GPU driver issue (try restarting the driver)\n"
+            "  Try: reduce --context or increase kv_quant_bits.";
         llama_model_free(model);
         return result;
     }
@@ -197,7 +208,9 @@ ExecutionResult execute(const std::string& model_path,
     llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
 
     if (llama_decode(ctx, batch) != 0) {
-        result.error_message = "Failed to decode prompt (out of memory?)";
+        result.error_message = "Failed to decode prompt (" + std::to_string(n_tokens)
+            + " tokens). Error: CUDA OOM or compute buffer too small."
+            " Try reducing context length or using fewer GPU layers.";
         sampler.stop();
         llama_free(ctx);
         llama_model_free(model);
@@ -227,6 +240,12 @@ ExecutionResult execute(const std::string& model_path,
     llama_token new_token;
 
     for (int i = 0; i < max_tokens; i++) {
+        // Check for Ctrl+C abort (Phase H: graceful abort)
+        if (is_abort_requested()) {
+            fprintf(stderr, "\n  [!] Generation aborted by user (Ctrl+C)\n");
+            break;
+        }
+
         // Sample next token using the sampler chain
         new_token = llama_sampler_sample(smpl, ctx, -1);
 
@@ -251,7 +270,10 @@ ExecutionResult execute(const std::string& model_path,
 
         if (llama_decode(ctx, decode_batch) != 0) {
             result.error_message = "Failed to decode token at step "
-                + std::to_string(i) + " (out of memory?)";
+                + std::to_string(i) + ". Possible causes:\n"
+                "  1. CUDA error (driver crash or GPU fell off bus)\n"
+                "  2. Memory corruption during generation\n"
+                "  3. Hardware fault (check nvidia-smi for XID errors)";
             break;
         }
     }
@@ -285,6 +307,16 @@ ExecutionResult execute(const std::string& model_path,
     result.peak_ram_used_bytes = hw_metrics.peak_ram_bytes;
     result.peak_gpu_temp_c = hw_metrics.max_temp_celsius;
     result.throttled = hw_metrics.throttled;
+
+    // Phase H: Report hardware warnings
+    if (hw_metrics.gpu_bus_off) {
+        fprintf(stderr, "  [!] WARNING: GPU may have fallen off the bus during generation."
+                " Performance data is unreliable.\n");
+    }
+    if (hw_metrics.os_swapping) {
+        fprintf(stderr, "  [!] WARNING: OS swapping detected (RAM oversubscribed)."
+                " Generation speed may be severely degraded.\n");
+    }
 
     // =========================================================================
     // D9: Cleanup

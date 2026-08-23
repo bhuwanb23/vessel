@@ -29,6 +29,8 @@ struct HardwareMetrics {
     uint64_t peak_ram_bytes = 0;
     uint32_t max_temp_celsius = 0;
     bool throttled = false;       // clock dropped below 85% of max
+    bool gpu_bus_off = false;     // NVML query failed — GPU may have fallen off bus
+    bool os_swapping = false;     // page file usage spiked — RAM oversubscribed
     int sample_count = 0;
 };
 
@@ -67,4 +69,6 @@ private:
     mutable std::mutex mutex_;
 
     uint32_t max_clock_mhz_ = 0;  // for throttle detection
+    uint64_t prev_page_file_avail_ = 0;  // for swap detection
+    bool nvml_failed_ = false;           // for GPU bus-off detection
 };
