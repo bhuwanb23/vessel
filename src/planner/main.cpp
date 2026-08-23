@@ -68,10 +68,13 @@ int main(int argc, char* argv[]) {
     bool verbose             = false;
     bool model_specified     = false;
     bool execute_mode        = false;   // --execute: run inference after planning
+    bool profile_neurons     = false;   // --profile-neurons: run neuron activation profiling
     std::string prompt       = DEFAULT_PROMPT;
     std::string download_dir;           // --download-dir override
     bool skip_verify         = false;   // --skip-verify: skip SHA256 verification
     int max_tokens           = 100;
+    double hot_ratio         = 0.15;   // --hot-ratio: target hot neuron ratio
+    uint64_t vram_budget     = 0;      // --vram-budget: VRAM for hot neurons (bytes)
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
