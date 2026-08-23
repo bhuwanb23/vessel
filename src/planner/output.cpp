@@ -494,6 +494,8 @@ void print_usage() {
     printf("  --prompt <text>                     Prompt for inference (default: benchmark)\n");
     printf("  --max-tokens <N>                    Max tokens to generate (default: 100)\n");
     printf("  --verbose                           Full hardware & model reports\n");
+    printf("  --calibration-info                  Show calibration log stats\n");
+    printf("  --calibration-reset                 Delete calibration log (with confirm)\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
     printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");

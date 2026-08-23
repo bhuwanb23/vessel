@@ -72,6 +72,85 @@ int main(int argc, char* argv[]) {
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
+        } else if (arg == "--calibration-info") {
+            // Print calibration log info and exit
+            std::string log_path = get_log_path();
+            auto records = read_all_records(log_path);
+            printf("\n=== Calibration Log ===\n");
+            printf("Location: %s\n", log_path.c_str());
+            printf("Total entries: %zu\n", records.size());
+            if (records.empty()) {
+                printf("\nNo calibration data yet. Run with --execute to generate data.\n");
+            } else {
+                // Find a model file for NVMe detection in fingerprint
+                std::string model_for_fingerprint;
+                const char* search_dirs[] = {"models/", "../models/", "./models/", "C:/dev/models/"};
+                for (const char* dir : search_dirs) {
+                    // Search for any .gguf file
+                    WIN32_FIND_DATAA find_data;
+                    std::string pattern = std::string(dir) + "*.gguf";
+                    HANDLE hFind = FindFirstFileA(pattern.c_str(), &find_data);
+                    if (hFind != INVALID_HANDLE_VALUE) {
+                        model_for_fingerprint = std::string(dir) + find_data.cFileName;
+                        FindClose(hFind);
+                        break;
+                    }
+                }
+                HardwareSpec hw_tmp = profile_hardware(model_for_fingerprint);
+                int match_count = 0;
+                for (const auto& r : records) {
+                    if (r.hardware_fingerprint == hw_tmp.hardware_fingerprint) match_count++;
+                }
+                printf("Entries for this hardware: %d\n", match_count);
+                printf("Hardware fingerprint: %s\n", hw_tmp.hardware_fingerprint.c_str());
+                if (match_count > 0) {
+                    CalibrationAggregator agg(hw_tmp.hardware_fingerprint);
+                    CalibrationData cal = agg.get_calibration_data();
+                    printf("\nCalibrated constants:\n");
+                    printf("  GPU overhead:     %llu MB (default: 512 MB, from %d samples)\n",
+                           (unsigned long long)(cal.adjusted_gpu_overhead_bytes / 1024 / 1024),
+                           cal.overhead_gpu_records);
+                    printf("  GPU decode eff:   %.3f (default: 0.270, from %d samples)\n",
+                           cal.adjusted_gpu_decode_efficiency > 0 ? cal.adjusted_gpu_decode_efficiency : 0.27,
+                           cal.decode_gpu_records);
+                    printf("  CPU decode eff:   %.3f (default: 0.800, from %d samples)\n",
+                           cal.adjusted_cpu_decode_efficiency > 0 ? cal.adjusted_cpu_decode_efficiency : 0.80,
+                           cal.decode_cpu_records);
+                    printf("  GPU prefill eff:  %.3f (default: 0.230, from %d samples)\n",
+                           cal.adjusted_gpu_prefill_efficiency > 0 ? cal.adjusted_gpu_prefill_efficiency : 0.23,
+                           cal.prefill_records);
+                } else {
+                    printf("\nNo entries match this hardware.\n");
+                }
+            }
+            printf("\n");
+            return 0;
+        } else if (arg == "--calibration-reset") {
+            // Delete calibration log with confirmation
+            std::string log_path = get_log_path();
+            auto records = read_all_records(log_path);
+            if (records.empty()) {
+                printf("No calibration log found at: %s\n", log_path.c_str());
+                return 0;
+            }
+            printf("This will delete %zu calibration records.\n", records.size());
+            printf("Location: %s\n", log_path.c_str());
+            printf("Delete? (y/n): ");
+            char confirm[8];
+            if (!fgets(confirm, sizeof(confirm), stdin)) {
+                printf("Cancelled.\n");
+                return 0;
+            }
+            if (confirm[0] != 'y' && confirm[0] != 'Y') {
+                printf("Cancelled.\n");
+                return 0;
+            }
+            if (remove(log_path.c_str()) == 0) {
+                printf("Calibration log deleted.\n");
+            } else {
+                fprintf(stderr, "Error: Could not delete %s\n", log_path.c_str());
+            }
+            return 0;
         } else if (arg == "--model" && i + 1 < argc) {
             model_url = argv[++i];
             model_specified = true;
