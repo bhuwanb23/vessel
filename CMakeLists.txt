@@ -223,6 +223,33 @@ add_executable(predictor_test
     ${PREDICTOR_SOURCES}
 )
 
+# ============================================
+# sparse_ffn_test — Step 10 Phase D validation
+# ============================================
+add_executable(sparse_ffn_test
+    src/hotcold/sparse_ffn_test.cpp
+    src/hotcold/sparse_ffn.cpp
+    src/hotcold/mask_file.cpp
+)
+
+target_include_directories(sparse_ffn_test PRIVATE
+    include
+    include/hotcold
+    ${CUDA_PATH}/include
+    ${LLAMA_PATH}/include
+    ${LLAMA_PATH}/ggml/include
+)
+
+target_link_directories(sparse_ffn_test PRIVATE
+    ${CUDA_PATH}/lib/x64
+    ${LLAMA_BUILD}/src
+    ${LLAMA_BUILD}/ggml/src
+    ${LLAMA_BUILD}/ggml/src/ggml-cpu
+    ${LLAMA_BUILD}/ggml/src/ggml-cuda
+)
+
+target_link_libraries(sparse_ffn_test PRIVATE llama ggml ggml-base ggml-cpu ggml-cuda)
+
 target_include_directories(predictor_test PRIVATE
     include
     src/predictor
