@@ -355,7 +355,7 @@ int main(int argc, char* argv[]) {
     ctx.n_hot = hot_set.n_hot;
     ctx.n_cold = hot_set.n_cold;
     ctx.activation = ActivationType::SILU;
-    ctx.silu_threshold = 0.01f;  // SiLU sparsity threshold
+    ctx.silu_threshold = 0.0f;  // SiLU sparsity threshold (minimal pruning for accuracy)
     
     std::vector<float> sparse_output(hidden_dim);
     SparseFFNResult last_result;
