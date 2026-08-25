@@ -51,9 +51,11 @@ static std::string get_timestamp_utc() {
 
 static const char* placement_to_string(PlacementStrategy p) {
     switch (p) {
-        case PlacementStrategy::FULL_GPU:     return "FULL_GPU";
-        case PlacementStrategy::GPU_CPU_SPLIT: return "GPU_CPU_SPLIT";
-        case PlacementStrategy::CPU_ONLY:     return "CPU_ONLY";
+        case PlacementStrategy::FULL_GPU:       return "FULL_GPU";
+        case PlacementStrategy::GPU_CPU_SPLIT:  return "GPU_CPU_SPLIT";
+        case PlacementStrategy::CPU_ONLY:       return "CPU_ONLY";
+        case PlacementStrategy::HOT_COLD_SPLIT: return "HOT_COLD_SPLIT";
+        case PlacementStrategy::LAYER_STREAM:   return "LAYER_STREAM";
         default: return "UNKNOWN";
     }
 }

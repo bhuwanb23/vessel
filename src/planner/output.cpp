@@ -282,9 +282,16 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
             snprintf(placement, sizeof(placement), "%s",
                      r.moe_plan.variant_name.c_str());
         } else {
-            snprintf(placement, sizeof(placement), "%s",
-                     s.placement == PlacementStrategy::FULL_GPU    ? "Full GPU" :
-                     s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "Split" : "CPU Only");
+            const char* placement_str;
+            switch (s.placement) {
+                case PlacementStrategy::FULL_GPU:       placement_str = "Full GPU"; break;
+                case PlacementStrategy::GPU_CPU_SPLIT:  placement_str = "Split"; break;
+                case PlacementStrategy::CPU_ONLY:       placement_str = "CPU Only"; break;
+                case PlacementStrategy::HOT_COLD_SPLIT: placement_str = "Hot/Cold"; break;
+                case PlacementStrategy::LAYER_STREAM:   placement_str = "Layer-Strm"; break;
+                default:                               placement_str = "Unknown"; break;
+            }
+            snprintf(placement, sizeof(placement), "%s", placement_str);
         }
         // For MoE models, show expert count instead of layers
         if (!r.moe_plan.variant_name.empty() && r.moe_plan.bytes_per_expert > 0) {

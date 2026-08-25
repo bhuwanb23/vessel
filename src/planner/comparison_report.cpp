@@ -55,10 +55,15 @@ static double calc_delta_pct(uint64_t predicted, uint64_t actual) {
 // =============================================================================
 
 static std::string strategy_desc(const StrategyConfig& s) {
-    const char* placement =
-        s.placement == PlacementStrategy::FULL_GPU     ? "Full GPU" :
-        s.placement == PlacementStrategy::GPU_CPU_SPLIT ? "GPU+CPU Split" :
-                                                          "CPU Only";
+    const char* placement;
+    switch (s.placement) {
+        case PlacementStrategy::FULL_GPU:       placement = "Full GPU"; break;
+        case PlacementStrategy::GPU_CPU_SPLIT:  placement = "GPU+CPU Split"; break;
+        case PlacementStrategy::CPU_ONLY:       placement = "CPU Only"; break;
+        case PlacementStrategy::HOT_COLD_SPLIT: placement = "Hot/Cold Split"; break;
+        case PlacementStrategy::LAYER_STREAM:   placement = "Layer-Stream"; break;
+        default:                               placement = "Unknown"; break;
+    }
     char buf[128];
     snprintf(buf, sizeof(buf), "%s, %u/%u layers, %uK context, %s KV",
              placement, s.gpu_layers, 28u,
