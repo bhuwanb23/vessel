@@ -133,9 +133,19 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
     // Calculate key values
     uint64_t weight_bytes = predict_weight_memory(model);
     
-    // Calculate max-safe context for FULL_GPU (VRAM budget)
-    uint64_t vram_budget = hw.vram_free_bytes;
-    uint32_t max_safe_ctx_gpu = calculate_max_safe_ctx(hw, model, vram_budget);
+    // Platform-specific memory budget (Phase H)
+    // Apple Silicon: use recommendedMaxWorkingSetSize × 0.9 as effective budget
+    // Discrete GPU: use VRAM free
+    uint64_t gpu_budget = hw.vram_free_bytes;
+    if (hw.is_unified_memory) {
+        // Apple Silicon: Metal memory limit is ~90% of total unified memory
+        // The profiler sets vram_free_bytes to available unified memory
+        // Use it directly — it's already the effective Metal budget
+        gpu_budget = hw.vram_free_bytes;
+    }
+    
+    // Calculate max-safe context for FULL_GPU/METAL_MAX (GPU budget)
+    uint32_t max_safe_ctx_gpu = calculate_max_safe_ctx(hw, model, gpu_budget);
     
     // Calculate max-safe context for CPU_ONLY (RAM budget)
     uint64_t ram_budget = hw.ram_free_bytes;
@@ -159,13 +169,23 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
     // Generate split points (deduplicate later)
     std::vector<uint32_t> split_points;
     
-    bool has_gpu = (hw.vram_free_bytes > 512ULL * 1024 * 1024);  // >512MB free VRAM
+    // Platform-specific GPU availability check (Phase H)
+    bool has_gpu = false;
+    if (hw.is_unified_memory) {
+        // Apple Silicon: always has GPU (unified memory)
+        // Check if model fits entirely in unified memory
+        uint64_t model_with_overhead = weight_bytes + 128ULL * 1024 * 1024;  // 128 MB Apple overhead
+        has_gpu = (model_with_overhead <= hw.vram_free_bytes);
+    } else {
+        // Discrete GPU: check if enough VRAM
+        has_gpu = (hw.vram_free_bytes > 512ULL * 1024 * 1024);  // >512MB free VRAM
+    }
     
     if (has_gpu) {
-        // 1. Full GPU (all layers)
+        // 1. Full GPU/Metal (all layers)
         split_points.push_back(model.layers);
         
-        // 2. Max-fit split (maximum layers that fit in VRAM)
+        // 2. Max-fit split (maximum layers that fit in VRAM/Metal)
         if (max_gpu_layers > 0 && max_gpu_layers < model.layers) {
             split_points.push_back(max_gpu_layers);
         }
@@ -197,10 +217,13 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                 // Skip if context exceeds model max
                 if (ctx > model.context_length) continue;
                 
-                // Determine placement type
+                // Determine placement type (Phase H: platform-aware)
                 PlacementStrategy placement;
                 if (gpu_layers >= model.layers) {
-                    placement = PlacementStrategy::FULL_GPU;
+                    // Apple Silicon: Full Metal; Discrete: Full GPU
+                    placement = hw.is_unified_memory ? PlacementStrategy::FULL_GPU
+                                                     : PlacementStrategy::FULL_GPU;
+                    // Both use FULL_GPU — the display name changes, not the enum
                 } else if (gpu_layers == 0) {
                     placement = PlacementStrategy::CPU_ONLY;
                 } else {
@@ -521,15 +544,24 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
     return all_strategies;
 }
 
-std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers) {
+std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers,
+                                         bool is_unified_memory) {
     std::ostringstream oss;
     
     switch (strat.placement) {
         case PlacementStrategy::FULL_GPU:
-            oss << "Full GPU (" << total_layers << " layers)";
+            if (is_unified_memory) {
+                oss << "Full Metal (" << total_layers << " layers)";
+            } else {
+                oss << "Full GPU (" << total_layers << " layers)";
+            }
             break;
         case PlacementStrategy::GPU_CPU_SPLIT:
-            oss << "Split " << strat.gpu_layers << "/" << (total_layers - strat.gpu_layers);
+            if (is_unified_memory) {
+                oss << "Metal/CPU " << strat.gpu_layers << "/" << (total_layers - strat.gpu_layers);
+            } else {
+                oss << "Split " << strat.gpu_layers << "/" << (total_layers - strat.gpu_layers);
+            }
             break;
         case PlacementStrategy::CPU_ONLY:
             oss << "CPU Only";

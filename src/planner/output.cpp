@@ -191,12 +191,22 @@ std::vector<StrategyResult> filter_by_context(const std::vector<StrategyResult>&
 // =============================================================================
 
 void print_hardware_brief(const HardwareSpec& hw) {
-    printf("Hardware: %s (%.1f GB VRAM, %.1f free) | %.0f GB RAM (%.0f free)"
-           " | NVMe %.1f/%.2f GB/s\n",
-           hw.gpu_name.c_str(),
-           hw.vram_total_bytes / 1e9, hw.vram_free_bytes / 1e9,
-           hw.ram_total_bytes / 1e9,  hw.ram_free_bytes / 1e9,
-           hw.nvme_sequential_mbs / 1000.0, hw.nvme_random_4k_mbs / 1000.0);
+    if (hw.is_unified_memory) {
+        // Apple Silicon: show unified memory info
+        printf("Hardware: %s (%.1f GB Unified Memory, %.1f free)"
+               " | NVMe %.1f/%.2f GB/s\n",
+               hw.gpu_name.c_str(),
+               hw.vram_total_bytes / 1e9, hw.vram_free_bytes / 1e9,
+               hw.nvme_sequential_mbs / 1000.0, hw.nvme_random_4k_mbs / 1000.0);
+    } else {
+        // Discrete GPU: show VRAM + RAM separately
+        printf("Hardware: %s (%.1f GB VRAM, %.1f free) | %.0f GB RAM (%.0f free)"
+               " | NVMe %.1f/%.2f GB/s\n",
+               hw.gpu_name.c_str(),
+               hw.vram_total_bytes / 1e9, hw.vram_free_bytes / 1e9,
+               hw.ram_total_bytes / 1e9,  hw.ram_free_bytes / 1e9,
+               hw.nvme_sequential_mbs / 1000.0, hw.nvme_random_4k_mbs / 1000.0);
+    }
 }
 
 void print_model_brief(const ModelSpec& model) {
@@ -279,11 +289,12 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
     printf("\n=== LLM Deployment Planner — Strategy Comparison ===\n\n");
     printf("Ranked by: %s (use --priority to change)\n\n", get_priority_name(priority));
 
-    // Table header
-    printf(" #  %-12s %-10s %-8s %-8s %-9s %-9s %-8s %-8s %-10s\n",
-           "Placement", "GPU Layers", "Context", "KV Cache",
+    // Table header (Phase H: platform-aware column name)
+    const char* layer_col_name = hw.is_unified_memory ? "Metal Layers" : "GPU Layers";
+    printf(" #  %-12s %-12s %-8s %-8s %-9s %-9s %-8s %-8s %-10s\n",
+           "Placement", layer_col_name, "Context", "KV Cache",
            "VRAM", "RAM", "tok/s", "TTFT", "Status");
-    printf("─── ──────────── ────────── ──────── ──────── "
+    printf("─── ──────────── ──────────── ──────── ──────── "
            "───────── ───────── ──────── ──────── ──────────\n");
 
     int row = 0;
@@ -303,8 +314,14 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
         } else {
             const char* placement_str;
             switch (s.placement) {
-                case PlacementStrategy::FULL_GPU:       placement_str = "Full GPU"; break;
-                case PlacementStrategy::GPU_CPU_SPLIT:  placement_str = "Split"; break;
+                case PlacementStrategy::FULL_GPU:
+                    // Platform-specific label (Phase H)
+                    placement_str = hw.is_unified_memory ? "Full Metal" : "Full GPU";
+                    break;
+                case PlacementStrategy::GPU_CPU_SPLIT:
+                    // Platform-specific label (Phase H)
+                    placement_str = hw.is_unified_memory ? "Metal/CPU" : "Split";
+                    break;
                 case PlacementStrategy::CPU_ONLY:       placement_str = "CPU Only"; break;
                 case PlacementStrategy::HOT_COLD_SPLIT: placement_str = "Hot/Cold"; break;
                 case PlacementStrategy::LAYER_STREAM:   placement_str = "Layer-Strm"; break;
@@ -317,7 +334,7 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
             snprintf(gpu_layers, sizeof(gpu_layers), "%u/%u",
                      r.moe_plan.gpu_experts_per_layer, r.moe_plan.gpu_experts_per_layer + r.moe_plan.cpu_experts_per_layer);
         } else {
-            // For dense models, use gpu_layers (set to total for FULL_GPU)
+            // For dense models, use gpu_layers
             snprintf(gpu_layers, sizeof(gpu_layers), "%u", s.gpu_layers);
         }
         snprintf(context, sizeof(context), "%uK", s.context_length / 1024);

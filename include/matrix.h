@@ -24,4 +24,5 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                                             const CalibrationData& cal);
 
 // Format strategy for display
-std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers);
+std::string format_strategy_description(const StrategyConfig& strat, uint32_t total_layers,
+                                         bool is_unified_memory = false);
