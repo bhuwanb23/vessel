@@ -38,8 +38,14 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     bool use_gpu = (gpu_layers > 0);
     uint64_t overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
     
-    // 4. Distribute memory based on strategy
-    if (gpu_layers >= model.layers) {
+    // 4. Distribute memory based on strategy and platform
+    if (hw.is_unified_memory) {
+        // Apple Silicon: unified memory — all memory is in the same pool
+        // VRAM and RAM are the same physical memory
+        // The placement only affects compute location, not memory location
+        pred.memory_vram_bytes = weight_bytes + kv_bytes + overhead_bytes;
+        pred.memory_ram_bytes = 0;  // Unified: all in "VRAM" (same as RAM)
+    } else if (gpu_layers >= model.layers) {
         // Full GPU: everything on VRAM
         pred.memory_vram_bytes = weight_bytes + kv_bytes + overhead_bytes;
         pred.memory_ram_bytes = 0;
@@ -50,7 +56,6 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     } else {
         // Split: proportionally distribute
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
-        double cpu_ratio = 1.0 - gpu_ratio;
         
         // Weights split by layer count
         uint64_t gpu_weights = static_cast<uint64_t>(weight_bytes * gpu_ratio);
@@ -167,8 +172,12 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
         overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
     }
 
-    // Distribute memory based on strategy
-    if (gpu_layers >= model.layers) {
+    // Distribute memory based on strategy and platform
+    if (hw.is_unified_memory) {
+        // Apple Silicon: unified memory — all memory is in the same pool
+        pred.memory_vram_bytes = weight_bytes + kv_bytes + overhead_bytes;
+        pred.memory_ram_bytes = 0;
+    } else if (gpu_layers >= model.layers) {
         pred.memory_vram_bytes = weight_bytes + kv_bytes + overhead_bytes;
         pred.memory_ram_bytes = 0;
     } else if (gpu_layers == 0) {
@@ -176,7 +185,6 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
         pred.memory_ram_bytes = weight_bytes + kv_bytes + overhead_bytes;
     } else {
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
-        double cpu_ratio = 1.0 - gpu_ratio;
         uint64_t gpu_weights = static_cast<uint64_t>(weight_bytes * gpu_ratio);
         uint64_t cpu_weights = weight_bytes - gpu_weights;
         uint64_t gpu_kv = static_cast<uint64_t>(kv_bytes * gpu_ratio);

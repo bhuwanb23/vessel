@@ -182,10 +182,24 @@ HotColdSpeedResult predict_hotcold_speed(
     double gpu_efficiency = 0.27;  // Conservative efficiency factor
     double gpu_time_best = gpu_bytes_best / (hw.gpu_bandwidth_gbs * 1e9 * gpu_efficiency);
     double cpu_time_best = cpu_bytes_best / (hw.ram_bandwidth_gbs * 1e9);
-    // PCIe transfer for cold results: hidden_dim * 4 bytes * 2 (complex number)
-    double pcie_time_best = (model.embedding_dim * 4.0 * 2) / (12.0e9);  // PCIe 4.0 x16 ≈ 12 GB/s
-
-    double total_time_best = gpu_time_best + cpu_time_best + pcie_time_best;
+    
+    // Platform-specific timing model
+    // Discrete GPU: CPU cold results must transfer across PCIe
+    // Apple Silicon: No PCIe penalty — data is already in unified memory
+    double pcie_time_best = 0.0;
+    if (!hw.is_unified_memory) {
+        // PCIe transfer for cold results: hidden_dim * 4 bytes * 2 (complex number)
+        pcie_time_best = (model.embedding_dim * 4.0 * 2) / (12.0e9);  // PCIe 4.0 x16 ≈ 12 GB/s
+    }
+    
+    double total_time_best = 0.0;
+    if (hw.is_unified_memory) {
+        // Apple Silicon: parallel execution, no PCIe penalty
+        total_time_best = std::max(gpu_time_best, cpu_time_best);
+    } else {
+        // Discrete GPU: sequential execution with PCIe transfer
+        total_time_best = gpu_time_best + cpu_time_best + pcie_time_best;
+    }
     result.tok_s_best = (total_time_best > 0) ? 1.0 / total_time_best : 0.0;
     result.gpu_time_ms = gpu_time_best * 1000.0;
     result.cpu_time_ms = cpu_time_best * 1000.0;
@@ -198,8 +212,17 @@ HotColdSpeedResult predict_hotcold_speed(
     double cpu_bytes_worst = cold_activated_params_worst * bytes_per_param * model.layers;
 
     double cpu_time_worst = cpu_bytes_worst / (hw.ram_bandwidth_gbs * 1e9);
-    double pcie_time_worst = (model.embedding_dim * 4.0 * 2) / (12.0e9);
-    double total_time_worst = gpu_time_best + cpu_time_worst + pcie_time_worst;
+    double pcie_time_worst = 0.0;
+    if (!hw.is_unified_memory) {
+        pcie_time_worst = (model.embedding_dim * 4.0 * 2) / (12.0e9);
+    }
+    
+    double total_time_worst = 0.0;
+    if (hw.is_unified_memory) {
+        total_time_worst = std::max(gpu_time_best, cpu_time_worst);
+    } else {
+        total_time_worst = gpu_time_best + cpu_time_worst + pcie_time_worst;
+    }
     result.tok_s_worst = (total_time_worst > 0) ? 1.0 / total_time_worst : 0.0;
 
     // Expected case: ~25% of cold neurons activate (average across prompts)
@@ -209,8 +232,17 @@ HotColdSpeedResult predict_hotcold_speed(
     double cpu_bytes_expected = cold_activated_params_expected * bytes_per_param * model.layers;
 
     double cpu_time_expected = cpu_bytes_expected / (hw.ram_bandwidth_gbs * 1e9);
-    double pcie_time_expected = (model.embedding_dim * 4.0 * 2) / (12.0e9);
-    double total_time_expected = gpu_time_best + cpu_time_expected + pcie_time_expected;
+    double pcie_time_expected = 0.0;
+    if (!hw.is_unified_memory) {
+        pcie_time_expected = (model.embedding_dim * 4.0 * 2) / (12.0e9);
+    }
+    
+    double total_time_expected = 0.0;
+    if (hw.is_unified_memory) {
+        total_time_expected = std::max(gpu_time_best, cpu_time_expected);
+    } else {
+        total_time_expected = gpu_time_best + cpu_time_expected + pcie_time_expected;
+    }
     result.tok_s_expected = (total_time_expected > 0) ? 1.0 / total_time_expected : 0.0;
 
     return result;

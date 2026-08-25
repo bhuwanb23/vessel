@@ -89,12 +89,18 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         tokens_per_sec = theoretical_tps * efficiency;
     }
     // =========================================================================
-    // GPU_CPU_SPLIT: Sequential dependency model — FIXED
-    // From spec: "Sequential dependency — slower side dominates total time."
+    // GPU_CPU_SPLIT: Platform-dependent model
     //
-    // Key insight: CPU layers operate near theoretical bandwidth (no GPU overhead)
-    // GPU layers have the 27% efficiency penalty
-    // The total time is sum of GPU time + CPU time
+    // Discrete GPU (NVIDIA/AMD):
+    //   Sequential dependency — layers must be processed one after another.
+    //   GPU and CPU can't overlap because data must cross PCIe.
+    //   Total time = GPU time + CPU time
+    //
+    // Apple Silicon (Unified Memory):
+    //   Parallel execution — no PCIe transfer needed.
+    //   Metal GPU and CPU can process different layers simultaneously.
+    //   Total time = max(GPU time, CPU time) — the faster side finishes first.
+    //   This makes split strategies MUCH more attractive on Apple Silicon.
     // =========================================================================
     else {
         double gpu_fraction = static_cast<double>(gpu_layers) / model.layers;
@@ -123,8 +129,24 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
             time_cpu_sec += kv_cpu / (ram_bw * 1e9 * cpu_efficiency);
         }
         
-        // Total time is sum (sequential, not parallel)
-        double total_time_sec = time_gpu_sec + time_cpu_sec;
+        // Platform-specific timing model
+        double total_time_sec = 0.0;
+        
+        if (hw.is_unified_memory) {
+            // Apple Silicon: parallel execution, no PCIe penalty
+            // Metal GPU and CPU can work on different layers simultaneously
+            // Total time = max(GPU time, CPU time)
+            total_time_sec = std::max(time_gpu_sec, time_cpu_sec);
+            
+            // Add a small synchronization overhead (~5%)
+            // Metal and CPU still need to synchronize at layer boundaries
+            double sync_overhead = 0.05 * std::min(time_gpu_sec, time_cpu_sec);
+            total_time_sec += sync_overhead;
+        } else {
+            // Discrete GPU: sequential execution, PCIe transfer dominates
+            // Total time = GPU time + CPU time
+            total_time_sec = time_gpu_sec + time_cpu_sec;
+        }
         
         if (total_time_sec > 0) {
             tokens_per_sec = 1.0 / total_time_sec;
