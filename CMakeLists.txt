@@ -250,6 +250,29 @@ target_link_directories(sparse_ffn_test PRIVATE
 
 target_link_libraries(sparse_ffn_test PRIVATE llama ggml ggml-base ggml-cpu ggml-cuda)
 
+# ============================================
+# Layer-Streaming Prediction Test
+# ============================================
+add_executable(layer_stream_test
+    src/hotcold/layer_stream_test.cpp
+    src/hotcold/hotcold_predictor.cpp
+    src/hotcold/weight_splitter.cpp
+    src/predictor/predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/confidence_calculator.cpp
+    src/predictor/moe_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/planner/moe_placer.cpp
+)
+
+target_include_directories(layer_stream_test PRIVATE
+    include
+    src/predictor
+)
+
+target_link_libraries(layer_stream_test PRIVATE ws2_32)
+
 target_include_directories(predictor_test PRIVATE
     include
     src/predictor
