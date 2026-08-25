@@ -421,7 +421,7 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                 for (uint32_t kv_bits : kv_quants) {
                     if (ctx > model.context_length) continue;
                     
-                    // Strategy: Hot/Cold Split
+                    // Strategy: Hot/Cold Split (HOT_COLD_SPLIT placement)
                     {
                         HotColdStrategy hc = compute_hotcold_strategy(
                             hw, model, profile, ctx, kv_bits, 0.15);
@@ -433,7 +433,7 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                                 hw, model, hc, kv_bits);
                             
                             StrategyConfig strat;
-                            strat.placement = PlacementStrategy::GPU_CPU_SPLIT;
+                            strat.placement = PlacementStrategy::HOT_COLD_SPLIT;
                             strat.gpu_layers = model.layers;  // All layers, but split neurons within
                             strat.context_length = ctx;
                             strat.batch_size = 1;
@@ -468,14 +468,14 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                         }
                     }
                     
-                    // Strategy: Layer-Streaming Fallback
+                    // Strategy: Layer-Streaming Fallback (LAYER_STREAM placement)
                     // Uses the new prediction function for accurate timing
                     {
                         LayerStreamingPrediction ls_pred = predict_layer_streaming(
                             hw, model, ctx, kv_bits);
                         
                         StrategyConfig strat;
-                        strat.placement = PlacementStrategy::CPU_ONLY;
+                        strat.placement = PlacementStrategy::LAYER_STREAM;
                         strat.gpu_layers = 0;
                         strat.context_length = ctx;
                         strat.batch_size = 1;
