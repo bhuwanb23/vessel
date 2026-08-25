@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "platform/platform_types.h"
 
 // =============================================================================
 // Metadata Source (where did the model info come from?)
@@ -46,29 +47,63 @@ enum class PredictionConfidence {
 // =============================================================================
 // Hardware Specification (from Step 1 hardware profiler)
 // =============================================================================
+// Platform-agnostic hardware specification.
+// The profiler fills this with platform-specific data.
+// =============================================================================
 struct HardwareSpec {
+    // =========================================================================
+    // Platform Info (Step 11, Phase A)
+    // =========================================================================
+    Platform platform = Platform::UNKNOWN;  // Platform enumeration
+    ComputeBackend backend = ComputeBackend::UNKNOWN;  // Compute backend
+    MemoryArchitecture memory_arch = MemoryArchitecture::UNKNOWN;  // Memory architecture
+    bool is_unified_memory = false;  // true for Apple Silicon, false for discrete GPUs
+    std::string compute_capability;  // "sm_86" / "gfx1100" / "apple_m2"
+    
+    // =========================================================================
     // System Memory
+    // =========================================================================
     uint64_t ram_total_bytes = 0;       // Total physical RAM (bytes)
     uint64_t ram_free_bytes = 0;        // Available RAM (bytes) - includes standby cache
     double ram_bandwidth_gbs = 0.0;     // RAM bandwidth (GB/s) - not measured in Step 1, estimate if unknown
 
+    // =========================================================================
     // GPU
-    uint64_t vram_total_bytes = 0;      // Total GPU VRAM (bytes)
-    uint64_t vram_free_bytes = 0;       // Free GPU VRAM (bytes)
-    double gpu_bandwidth_gbs = 0.0;     // GPU memory bandwidth (GB/s) - derived from NVML
-    double gpu_tflops_fp16 = 0.0;       // GPU FP16 TFLOPS - from spec or NVML
+    // =========================================================================
+    uint64_t vram_total_bytes = 0;      // Total GPU VRAM (bytes) - unified memory total on Apple
+    uint64_t vram_free_bytes = 0;       // Free GPU VRAM (bytes) - unified memory available on Apple
+    double gpu_bandwidth_gbs = 0.0;     // GPU memory bandwidth (GB/s)
+    double gpu_tflops_fp16 = 0.0;       // GPU FP16 TFLOPS
+    uint32_t gpu_temp_celsius = 0;      // GPU temperature (Celsius)
+    uint32_t gpu_clock_mhz = 0;        // GPU clock speed (MHz)
+    uint32_t gpu_utilization = 0;       // GPU utilization (0-100)
+    uint32_t gpu_count = 1;            // Number of GPUs
 
+    // =========================================================================
     // Storage
+    // =========================================================================
     double nvme_sequential_mbs = 0.0;   // NVMe sequential read (MB/s)
     double nvme_random_4k_mbs = 0.0;    // NVMe random 4K read (MB/s)
 
-    // Hardware fingerprint (unique key for calibration log)
+    // =========================================================================
+    // Hardware Fingerprint (unique key for calibration log)
+    // =========================================================================
     std::string hardware_fingerprint;
 
+    // =========================================================================
     // GPU Info
+    // =========================================================================
     std::string gpu_name;               // GPU model name (for display)
     uint32_t gpu_compute_major = 0;     // CUDA compute capability major
     uint32_t gpu_compute_minor = 0;     // CUDA compute capability minor
+    
+    // =========================================================================
+    // Platform-Specific Helpers
+    // =========================================================================
+    bool has_gpu() const { return backend != ComputeBackend::CPU && backend != ComputeBackend::UNKNOWN; }
+    bool is_nvidia() const { return platform == Platform::NVIDIA_WINDOWS || platform == Platform::NVIDIA_LINUX; }
+    bool is_amd() const { return platform == Platform::AMD_LINUX || platform == Platform::AMD_WINDOWS; }
+    bool is_apple() const { return platform == Platform::APPLE_MACOS; }
 };
 
 // =============================================================================
