@@ -85,6 +85,12 @@ std::string record_to_json(const CalibrationRecord& r) {
         o << ",\"gpu_experts_per_layer\":" << r.gpu_experts_per_layer;
         o << ",\"total_experts_per_layer\":" << r.total_experts_per_layer;
     }
+    // Hot/Cold-specific strategy fields (Step 10, Phase H)
+    if (r.hot_neuron_pct > 0) {
+        o << ",\"hot_neuron_pct\":" << r.hot_neuron_pct;
+        o << ",\"profiled\":" << (r.profiled ? "true" : "false");
+        o << ",\"cold_activation_rate\":" << r.cold_activation_rate;
+    }
     o << "},";
 
     // Predicted
@@ -99,6 +105,11 @@ std::string record_to_json(const CalibrationRecord& r) {
         o << ",\"tokens_per_sec_min\":" << r.predicted_tokens_per_sec_min;
         o << ",\"tokens_per_sec_max\":" << r.predicted_tokens_per_sec_max;
         o << ",\"tokens_per_sec_expected\":" << r.predicted_tokens_per_sec_expected;
+    }
+    // Hot/Cold-specific predicted ranges (Step 10, Phase H)
+    if (r.predicted_tok_s_range_min > 0 || r.predicted_tok_s_range_max > 0) {
+        o << ",\"tok_s_range_min\":" << r.predicted_tok_s_range_min;
+        o << ",\"tok_s_range_max\":" << r.predicted_tok_s_range_max;
     }
     o << "},";
 
@@ -121,6 +132,10 @@ std::string record_to_json(const CalibrationRecord& r) {
     }
     if (r.actual_token_time_variance > 0) {
         o << ",\"token_time_variance\":" << r.actual_token_time_variance;
+    }
+    // Hot/Cold-specific actual telemetry (Step 10, Phase H)
+    if (r.actual_cold_compute_pct > 0) {
+        o << ",\"cold_compute_pct\":" << r.actual_cold_compute_pct;
     }
     o << "},";
 
@@ -244,6 +259,13 @@ bool json_to_record(const std::string& json, CalibrationRecord& record) {
         if (!ge.empty()) record.gpu_experts_per_layer = (uint32_t)std::stoul(ge);
         std::string te = find_json_value(strategy_json, "total_experts_per_layer");
         if (!te.empty()) record.total_experts_per_layer = (uint32_t)std::stoul(te);
+        // Hot/Cold-specific strategy fields (Step 10, Phase H)
+        std::string hnp = find_json_value(strategy_json, "hot_neuron_pct");
+        if (!hnp.empty()) record.hot_neuron_pct = std::stod(hnp);
+        std::string prof = find_json_value(strategy_json, "profiled");
+        if (!prof.empty()) record.profiled = (prof == "true");
+        std::string car = find_json_value(strategy_json, "cold_activation_rate");
+        if (!car.empty()) record.cold_activation_rate = std::stod(car);
     }
 
     // Predicted sub-object
@@ -266,6 +288,11 @@ bool json_to_record(const std::string& json, CalibrationRecord& record) {
         if (!v.empty()) record.predicted_tokens_per_sec_max = std::stod(v);
         v = find_json_value(predicted_json, "tokens_per_sec_expected");
         if (!v.empty()) record.predicted_tokens_per_sec_expected = std::stod(v);
+        // Hot/Cold-specific predicted ranges (Step 10, Phase H)
+        v = find_json_value(predicted_json, "tok_s_range_min");
+        if (!v.empty()) record.predicted_tok_s_range_min = std::stod(v);
+        v = find_json_value(predicted_json, "tok_s_range_max");
+        if (!v.empty()) record.predicted_tok_s_range_max = std::stod(v);
     }
 
     // Actual sub-object
@@ -295,6 +322,9 @@ bool json_to_record(const std::string& json, CalibrationRecord& record) {
         if (!v.empty()) record.actual_pcie_throughput_mbs = std::stoull(v);
         v = find_json_value(actual_json, "token_time_variance");
         if (!v.empty()) record.actual_token_time_variance = std::stod(v);
+        // Hot/Cold-specific actual telemetry (Step 10, Phase H)
+        v = find_json_value(actual_json, "cold_compute_pct");
+        if (!v.empty()) record.actual_cold_compute_pct = std::stod(v);
     }
 
     return true;
@@ -334,6 +364,14 @@ CalibrationRecord make_record(
             (uint32_t)(prediction.gpu_hit_probability * model.expert_count + 0.5) : 0;
         r.total_experts_per_layer = model.expert_count;
     }
+    
+    // Hot/Cold-specific strategy fields (Step 10, Phase H)
+    if (strategy.placement == PlacementStrategy::HOT_COLD_SPLIT) {
+        // Hot neuron percentage (from the strategy description or default 15%)
+        r.hot_neuron_pct = 0.15;  // Default; actual value from profiling
+        r.profiled = false;       // Will be set to true if mask file exists
+        r.cold_activation_rate = 0.12;  // Default estimate
+    }
 
     // Predicted
     r.predicted_tokens_per_sec = prediction.tokens_per_sec;
@@ -351,6 +389,12 @@ CalibrationRecord make_record(
         r.predicted_tokens_per_sec_min = prediction.tok_s_worst;
         r.predicted_tokens_per_sec_max = prediction.tok_s_best;
         r.predicted_tokens_per_sec_expected = prediction.tok_s_expected;
+    }
+    
+    // Hot/Cold-specific predicted ranges (Step 10, Phase H)
+    if (strategy.placement == PlacementStrategy::HOT_COLD_SPLIT) {
+        r.predicted_tok_s_range_min = prediction.tok_s_worst;
+        r.predicted_tok_s_range_max = prediction.tok_s_best;
     }
 
     // Actual

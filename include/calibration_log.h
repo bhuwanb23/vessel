@@ -47,6 +47,11 @@ struct CalibrationRecord {
     // MoE-specific strategy fields (Step 9, Phase E)
     uint32_t gpu_experts_per_layer = 0;     // Number of routed experts on GPU per layer
     uint32_t total_experts_per_layer = 0;   // Total routed experts per layer (N)
+    
+    // Hot/Cold-specific strategy fields (Step 10, Phase H)
+    double hot_neuron_pct = 0.0;            // Fraction of neurons on GPU (0.15 = 15%)
+    bool profiled = false;                  // Was a real profiling mask used?
+    double cold_activation_rate = 0.0;      // Observed sparsity during decode
 
     // Predicted (from Step 3 predictor)
     double predicted_tokens_per_sec = 0.0;
@@ -59,6 +64,10 @@ struct CalibrationRecord {
     double predicted_tokens_per_sec_min = 0.0;   // Worst case (0%% GPU hit)
     double predicted_tokens_per_sec_max = 0.0;   // Best case (100%% GPU hit)
     double predicted_tokens_per_sec_expected = 0.0; // Expected (uniform routing)
+    
+    // Hot/Cold-specific predicted ranges (Step 10, Phase H)
+    double predicted_tok_s_range_min = 0.0;   // Worst case (all cold neurons activate)
+    double predicted_tok_s_range_max = 0.0;   // Best case (few cold neurons activate)
 
     // Actual (from Step 6 executor)
     double actual_tokens_per_sec = 0.0;
@@ -74,6 +83,9 @@ struct CalibrationRecord {
     double actual_tokens_per_sec_max = 0.0;   // Max measured tok/s (variance)
     uint64_t actual_pcie_throughput_mbs = 0;   // Average PCIe RX throughput
     double actual_token_time_variance = 0.0;   // Variance in token generation time
+    
+    // Hot/Cold-specific actual telemetry (Step 10, Phase H)
+    double actual_cold_compute_pct = 0.0;     // Fraction of time spent on CPU cold path
 
     // Metadata
     std::string timestamp;              // ISO 8601 UTC
