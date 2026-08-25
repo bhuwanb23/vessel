@@ -94,6 +94,34 @@ ConfidenceResult calculate_confidence(
         return result;
     }
     
+    // =========================================================================
+    // Platform-specific confidence adjustments (Phase G)
+    // =========================================================================
+    // From spec:
+    //   NVIDIA: MEDIUM initial → HIGH after 5+ calibration runs
+    //   AMD Linux (HIP): MEDIUM initial → HIGH after 5+ calibration runs
+    //   AMD Windows (Vulkan): LOW initial → MEDIUM after 5+ calibration runs
+    //   Apple Metal: MEDIUM initial → HIGH after 5+ calibration runs
+    //   CPU-only: HIGH initial → HIGH after calibration
+    // =========================================================================
+    
+    bool is_vulkan = (hw.backend == ComputeBackend::VULKAN);
+    bool is_cpu_only = (hw.backend == ComputeBackend::CPU || hw.platform == Platform::CPU_ONLY);
+    
+    // Vulkan gets lower initial confidence (less mature backend)
+    if (is_vulkan && !has_calibration) {
+        result.level = PredictionConfidence::LOW;
+        result.reason = "AMD Vulkan backend (less mature, higher performance variance)";
+        return result;
+    }
+    
+    // CPU-only gets high confidence (simple, well-understood)
+    if (is_cpu_only) {
+        result.level = PredictionConfidence::HIGH;
+        result.reason = "CPU-only inference (simple, well-understood model)";
+        return result;
+    }
+    
     // Check for HIGH confidence conditions
     if (has_gguf_header && is_dense && has_calibration && ctx_validated) {
         result.level = PredictionConfidence::HIGH;

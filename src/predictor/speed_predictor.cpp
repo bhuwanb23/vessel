@@ -57,8 +57,21 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         // Theoretical: bandwidth / bytes_per_token
         double theoretical_tps = (gpu_bw * 1e9) / total_bytes_per_token;
         
-        // Efficiency: 27% for full GPU (calibrated against real hardware)
-        double efficiency = 0.27;
+        // Platform-specific efficiency (Phase G)
+        // NVIDIA: 27% (calibrated against RTX 5060)
+        // AMD HIP: 25% (slightly lower, less mature optimization)
+        // AMD Vulkan: 20% (much lower, experimental backend)
+        // Apple Metal: 35% (unified memory, better cache behavior)
+        // CPU-only: 80% (near theoretical)
+        double efficiency = 0.27;  // Default: NVIDIA
+        
+        if (hw.is_unified_memory) {
+            efficiency = 0.35;  // Apple Silicon: better cache behavior
+        } else if (hw.backend == ComputeBackend::HIP) {
+            efficiency = 0.25;  // AMD ROCm: slightly lower
+        } else if (hw.backend == ComputeBackend::VULKAN) {
+            efficiency = 0.20;  // AMD Vulkan: experimental
+        }
         
         // Penalize models that barely fit in VRAM (cache thrashing)
         if (hw.vram_total_bytes > 0) {
@@ -83,8 +96,14 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         // Theoretical: bandwidth / bytes_per_token
         double theoretical_tps = (ram_bw * 1e9) / total_bytes_per_token;
         
-        // Efficiency: 80% for CPU-only (near theoretical, minimal overhead)
-        double efficiency = 0.80;
+        // Platform-specific CPU efficiency (Phase G)
+        // Apple Silicon: 75% (unified memory, good cache)
+        // x86 (Intel/AMD): 80% (mature SIMD optimizations)
+        double efficiency = 0.80;  // Default: x86
+        
+        if (hw.is_unified_memory) {
+            efficiency = 0.75;  // Apple Silicon CPU: slightly lower than x86
+        }
         
         tokens_per_sec = theoretical_tps * efficiency;
     }
@@ -113,12 +132,24 @@ double predict_decode_speed(const HardwareSpec& hw, const ModelSpec& model,
         double bytes_gpu = gpu_fraction * weight_bytes_per_token;
         double bytes_cpu = cpu_fraction * weight_bytes_per_token;
         
+        // Platform-specific efficiency factors (Phase G)
+        double gpu_efficiency = 0.27;  // Default: NVIDIA
+        double cpu_efficiency = 0.80;  // Default: x86 CPU
+        
+        if (hw.is_unified_memory) {
+            // Apple Silicon: better GPU cache behavior, slightly lower CPU efficiency
+            gpu_efficiency = 0.35;
+            cpu_efficiency = 0.75;
+        } else if (hw.backend == ComputeBackend::HIP) {
+            gpu_efficiency = 0.25;  // AMD ROCm
+        } else if (hw.backend == ComputeBackend::VULKAN) {
+            gpu_efficiency = 0.20;  // AMD Vulkan
+        }
+        
         // GPU time: includes efficiency penalty (memory-bandwidth-bound)
-        double gpu_efficiency = 0.27;
         double time_gpu_sec = (gpu_bw > 0) ? (bytes_gpu / (gpu_bw * 1e9 * gpu_efficiency)) : 1e6;
         
         // CPU time: near theoretical bandwidth (no GPU overhead)
-        double cpu_efficiency = 0.80;
         double time_cpu_sec = bytes_cpu / (ram_bw * 1e9 * cpu_efficiency);
         
         // KV cache reads (split proportionally, same efficiency as weights)
@@ -237,14 +268,25 @@ double predict_ttft_ms(const HardwareSpec& hw, const ModelSpec& model,
     
     double device_tflops = 0.0;
     if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
-        double gpu_efficiency = 0.23;
+        // Platform-specific prefill efficiency (Phase G)
+        double gpu_efficiency = 0.23;  // Default: NVIDIA
+        if (hw.is_unified_memory) {
+            gpu_efficiency = 0.30;  // Apple Silicon: better cache
+        } else if (hw.backend == ComputeBackend::HIP) {
+            gpu_efficiency = 0.20;  // AMD ROCm
+        } else if (hw.backend == ComputeBackend::VULKAN) {
+            gpu_efficiency = 0.18;  // AMD Vulkan
+        }
+        
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
         device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * gpu_efficiency;
         if (gpu_ratio < 1.0) {
-            device_tflops += (1.0 - gpu_ratio) * 0.8;
+            // CPU prefill efficiency
+            double cpu_tflops = hw.is_unified_memory ? 0.7 : 0.8;
+            device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
         }
     } else {
-        device_tflops = 0.8;
+        device_tflops = hw.is_unified_memory ? 0.7 : 0.8;
     }
     
     double ttft_compute_ms = (device_tflops > 0) ? 
@@ -339,14 +381,22 @@ double predict_ttft_ms(const HardwareSpec& hw, const ModelSpec& model,
 
     double device_tflops = 0.0;
     if (gpu_layers > 0 && hw.gpu_tflops_fp16 > 0) {
+        // Use calibrated efficiency if > 0, otherwise platform default
         double eff = (gpu_prefill_efficiency > 0) ? gpu_prefill_efficiency : 0.23;
+        if (gpu_prefill_efficiency <= 0) {
+            // Apply platform-specific default
+            if (hw.is_unified_memory) eff = 0.30;
+            else if (hw.backend == ComputeBackend::HIP) eff = 0.20;
+            else if (hw.backend == ComputeBackend::VULKAN) eff = 0.18;
+        }
         double gpu_ratio = static_cast<double>(gpu_layers) / model.layers;
         device_tflops = hw.gpu_tflops_fp16 * gpu_ratio * eff;
         if (gpu_ratio < 1.0) {
-            device_tflops += (1.0 - gpu_ratio) * 0.8;
+            double cpu_tflops = hw.is_unified_memory ? 0.7 : 0.8;
+            device_tflops += (1.0 - gpu_ratio) * cpu_tflops;
         }
     } else {
-        device_tflops = 0.8;
+        device_tflops = hw.is_unified_memory ? 0.7 : 0.8;
     }
 
     double ttft_compute_ms = (device_tflops > 0)
