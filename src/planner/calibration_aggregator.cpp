@@ -50,8 +50,13 @@ std::vector<const CalibrationRecord*> CalibrationAggregator::filter_for_overhead
 {
     std::vector<const CalibrationRecord*> result;
     for (const auto& r : matching_records_) {
-        // Must match placement
-        if (r.placement != placement) continue;
+        // Must match placement (or be compatible)
+        bool placement_match = (r.placement == placement);
+        // HOT_COLD_SPLIT is compatible with GPU_CPU_SPLIT for overhead calculation
+        if (!placement_match && placement == "GPU_CPU_SPLIT" && r.placement == "HOT_COLD_SPLIT") {
+            placement_match = true;
+        }
+        if (!placement_match) continue;
         // Must not be throttled (distorts overhead measurements)
         if (r.actual_throttled) continue;
         // Must have meaningful data
@@ -70,8 +75,13 @@ std::vector<const CalibrationRecord*> CalibrationAggregator::filter_for_decode_s
 {
     std::vector<const CalibrationRecord*> result;
     for (const auto& r : matching_records_) {
-        // Must match placement
-        if (r.placement != placement) continue;
+        // Must match placement (or be compatible)
+        bool placement_match = (r.placement == placement);
+        // HOT_COLD_SPLIT is compatible with GPU_CPU_SPLIT for decode speed
+        if (!placement_match && placement == "GPU_CPU_SPLIT" && r.placement == "HOT_COLD_SPLIT") {
+            placement_match = true;
+        }
+        if (!placement_match) continue;
         // Must not be throttled
         if (r.actual_throttled) continue;
         // Must have meaningful token count (at least 50 for stable tok/s)
