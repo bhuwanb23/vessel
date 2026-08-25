@@ -338,44 +338,77 @@ int main(int argc, char* argv[]) {
            dense_ms, dense_ms / num_iterations);
     
     // =========================================================================
-    // Step 5: Run sparse FFN (hot/cold split)
+    // Step 5a: Run sparse FFN WITHOUT pruning (threshold = -inf) for correctness
     // =========================================================================
-    printf("\nStep 5: Running sparse FFN (hot/cold split)...\n");
+    printf("\nStep 5a: Running sparse FFN (no pruning, for correctness)...\n");
     
-    // Build sparse FFN context
-    SparseFFNContext ctx;
-    ctx.up_proj_hot = up_hot.data();
-    ctx.up_proj_cold = up_cold.data();
-    ctx.gate_proj_hot = gate_hot.data();
-    ctx.gate_proj_cold = gate_cold.data();
-    ctx.down_proj_hot = down_hot.data();
-    ctx.down_proj_cold = down_cold.data();
-    ctx.hidden_dim = hidden_dim;
-    ctx.ffn_dim = test_ffn_dim;
-    ctx.n_hot = hot_set.n_hot;
-    ctx.n_cold = hot_set.n_cold;
-    ctx.activation = ActivationType::SILU;
-    ctx.silu_threshold = 0.0f;  // SiLU sparsity threshold (minimal pruning for accuracy)
+    SparseFFNContext ctx_correctness;
+    ctx_correctness.up_proj_hot = up_hot.data();
+    ctx_correctness.up_proj_cold = up_cold.data();
+    ctx_correctness.gate_proj_hot = gate_hot.data();
+    ctx_correctness.gate_proj_cold = gate_cold.data();
+    ctx_correctness.down_proj_hot = down_hot.data();
+    ctx_correctness.down_proj_cold = down_cold.data();
+    ctx_correctness.hidden_dim = hidden_dim;
+    ctx_correctness.ffn_dim = test_ffn_dim;
+    ctx_correctness.n_hot = hot_set.n_hot;
+    ctx_correctness.n_cold = hot_set.n_cold;
+    ctx_correctness.activation = ActivationType::SILU;
+    ctx_correctness.silu_threshold = -1e30f;  // No pruning — all cold neurons computed
     
     std::vector<float> sparse_output(hidden_dim);
     SparseFFNResult last_result;
     
     auto t_sparse_start = std::chrono::high_resolution_clock::now();
     for (int iter = 0; iter < num_iterations; iter++) {
-        last_result = sparse_ffn_forward(ctx, input.data(), sparse_output.data());
+        last_result = sparse_ffn_forward(ctx_correctness, input.data(), sparse_output.data());
     }
     auto t_sparse_end = std::chrono::high_resolution_clock::now();
     double sparse_ms = std::chrono::duration<double, std::milli>(t_sparse_end - t_sparse_start).count();
     
-    printf("  Sparse FFN: %.2f ms total, %.4f ms/iter\n",
+    printf("  Sparse FFN (no prune): %.2f ms total, %.4f ms/iter\n",
            sparse_ms, sparse_ms / num_iterations);
     printf("  Last run: GPU=%.4f ms, CPU=%.4f ms\n",
            last_result.gpu_compute_ms, last_result.cpu_compute_ms);
     
     // =========================================================================
-    // Step 6: Compare outputs
+    // Step 5b: Run sparse FFN WITH pruning for speedup measurement
     // =========================================================================
-    printf("\nStep 6: Comparing outputs...\n");
+    printf("\nStep 5b: Running sparse FFN (with pruning, for speedup)...\n");
+    
+    SparseFFNContext ctx_sparse;
+    ctx_sparse.up_proj_hot = up_hot.data();
+    ctx_sparse.up_proj_cold = up_cold.data();
+    ctx_sparse.gate_proj_hot = gate_hot.data();
+    ctx_sparse.gate_proj_cold = gate_cold.data();
+    ctx_sparse.down_proj_hot = down_hot.data();
+    ctx_sparse.down_proj_cold = down_cold.data();
+    ctx_sparse.hidden_dim = hidden_dim;
+    ctx_sparse.ffn_dim = test_ffn_dim;
+    ctx_sparse.n_hot = hot_set.n_hot;
+    ctx_sparse.n_cold = hot_set.n_cold;
+    ctx_sparse.activation = ActivationType::SILU;
+    ctx_sparse.silu_threshold = 0.01f;  // Prune neurons where SiLU(gate) < 0.01
+    
+    std::vector<float> sparse_pruned_output(hidden_dim);
+    SparseFFNResult last_pruned_result;
+    
+    auto t_sparse_pruned_start = std::chrono::high_resolution_clock::now();
+    for (int iter = 0; iter < num_iterations; iter++) {
+        last_pruned_result = sparse_ffn_forward(ctx_sparse, input.data(), sparse_pruned_output.data());
+    }
+    auto t_sparse_pruned_end = std::chrono::high_resolution_clock::now();
+    double sparse_pruned_ms = std::chrono::duration<double, std::milli>(t_sparse_pruned_end - t_sparse_pruned_start).count();
+    
+    printf("  Sparse FFN (pruned):  %.2f ms total, %.4f ms/iter\n",
+           sparse_pruned_ms, sparse_pruned_ms / num_iterations);
+    printf("  Last run: GPU=%.4f ms, CPU=%.4f ms\n",
+           last_pruned_result.gpu_compute_ms, last_pruned_result.cpu_compute_ms);
+    
+    // =========================================================================
+    // Step 6: Compare outputs (using no-pruning result for correctness)
+    // =========================================================================
+    printf("\nStep 6: Comparing outputs (no-pruning sparse vs dense)...\n");
     
     float l2_error = compute_l2_error(dense_output.data(), sparse_output.data(), hidden_dim);
     float max_error = 0.0f;
@@ -402,11 +435,13 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     printf("\n=== Results ===\n");
     
-    float speedup = (sparse_ms > 0) ? dense_ms / sparse_ms : 0.0f;
+    float speedup_no_prune = (sparse_ms > 0) ? dense_ms / sparse_ms : 0.0f;
+    float speedup_pruned = (sparse_pruned_ms > 0) ? dense_ms / sparse_pruned_ms : 0.0f;
     float sparsity_achieved = (hot_set.n_cold > 0) ?
-        (1.0f - static_cast<float>(last_result.cold_neurons_activated) / hot_set.n_cold) * 100.0f : 0.0f;
+        (1.0f - static_cast<float>(last_pruned_result.cold_neurons_activated) / hot_set.n_cold) * 100.0f : 0.0f;
     
-    printf("Speedup:          %.2fx\n", speedup);
+    printf("Speedup (no prune): %.2fx\n", speedup_no_prune);
+    printf("Speedup (pruned):   %.2fx\n", speedup_pruned);
     printf("Sparsity:         %.1f%% of cold neurons skipped\n", sparsity_achieved);
     printf("Hot neurons:      %u / %u (%.0f%%)\n",
            hot_set.n_hot, test_ffn_dim, 100.0f * hot_set.n_hot / test_ffn_dim);

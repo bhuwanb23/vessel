@@ -89,10 +89,11 @@ void sparse_ffn_gpu_hot(
     }
 
     // Step 3: Apply activation and gating
-    // gated[h] = activation(up_result[h]) * gate_result[h]
+    // gated[h] = activation(gate_result[h]) * up_result[h]
+    // Note: Standard Llama FFN: y = SiLU(gate) * up, not SiLU(up) * gate
     std::vector<float> gated(ctx.n_hot, 0.0f);
     for (uint32_t h = 0; h < ctx.n_hot; h++) {
-        gated[h] = apply_activation(up_result[h], ctx.activation) * gate_result[h];
+        gated[h] = apply_activation(gate_result[h], ctx.activation) * up_result[h];
     }
 
     // Step 4: down_proj_hot(gated) -> [hidden_dim]
@@ -117,44 +118,39 @@ void sparse_ffn_cpu_cold(
     const float* input,           // [hidden_dim]
     float* cpu_partial            // [hidden_dim] (pre-allocated, zeroed)
 ) {
-    // Step 1: Compute pre-activation for all cold neurons
-    // up_proj_cold is [hidden_dim, n_cold]
+    // Step 1: Compute gate pre-activation for all cold neurons
+    // Standard FFN: y = SiLU(gate) * up, so sparsity is determined by gate pre-activation
+    // gate_proj_cold is [hidden_dim, n_cold]
+    std::vector<float> gate_pre(ctx.n_cold, 0.0f);
     std::vector<float> up_pre(ctx.n_cold, 0.0f);
     for (uint32_t c = 0; c < ctx.n_cold; c++) {
-        float sum = 0.0f;
+        float g_sum = 0.0f;
+        float u_sum = 0.0f;
         for (uint32_t j = 0; j < ctx.hidden_dim; j++) {
-            sum += input[j] * ctx.up_proj_cold[j * ctx.n_cold + c];
+            g_sum += input[j] * ctx.gate_proj_cold[j * ctx.n_cold + c];
+            u_sum += input[j] * ctx.up_proj_cold[j * ctx.n_cold + c];
         }
-        up_pre[c] = sum;
+        gate_pre[c] = g_sum;
+        up_pre[c] = u_sum;
     }
 
     // Step 2: Detect which cold neurons actually activate
-    // For ReLU: neurons with pre_activation <= 0 are exactly zero
-    // For SiLU/GELU: use threshold to approximate
+    // For ReLU: neurons with gate_pre_activation <= 0 are exactly zero
+    // For SiLU/GELU: use threshold on gate pre-activation
     auto activated_cold = detect_activated_cold_neurons(
-        up_pre.data(), ctx.n_cold, ctx.activation, ctx.silu_threshold);
+        gate_pre.data(), ctx.n_cold, ctx.activation, ctx.silu_threshold);
 
     if (activated_cold.empty()) {
         // No cold neurons activated — cpu_partial stays zero
         return;
     }
 
-    // Step 3: Compute gate_proj for activated cold neurons only
-    std::vector<float> gate_activated(activated_cold.size(), 0.0f);
-    for (size_t i = 0; i < activated_cold.size(); i++) {
-        uint32_t c = activated_cold[i];
-        float sum = 0.0f;
-        for (uint32_t j = 0; j < ctx.hidden_dim; j++) {
-            sum += input[j] * ctx.gate_proj_cold[j * ctx.n_cold + c];
-        }
-        gate_activated[i] = sum;
-    }
-
-    // Step 4: Apply activation and gating for activated cold neurons
+    // Step 3: Compute gated values for activated cold neurons only
+    // Same convention: SiLU(gate) * up
     std::vector<float> gated_cold(activated_cold.size(), 0.0f);
     for (size_t i = 0; i < activated_cold.size(); i++) {
         uint32_t c = activated_cold[i];
-        gated_cold[i] = apply_activation(up_pre[c], ctx.activation) * gate_activated[i];
+        gated_cold[i] = apply_activation(gate_pre[c], ctx.activation) * up_pre[c];
     }
 
     // Step 5: down_proj for activated cold neurons
@@ -210,9 +206,21 @@ SparseFFNResult sparse_ffn_forward(
     auto t3 = std::chrono::high_resolution_clock::now();
     result.cpu_compute_ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
 
-    // Count activated cold neurons (approximation — from the pre-activation detection)
-    // In full implementation, this would come from sparse_ffn_cpu_cold
-    result.cold_neurons_activated = ctx.n_cold / 4;  // Rough estimate
+    // Count activated cold neurons (exact count from the detection step)
+    // We recompute here to get the actual count for reporting
+    {
+        std::vector<float> gate_pre(ctx.n_cold, 0.0f);
+        for (uint32_t c = 0; c < ctx.n_cold; c++) {
+            float sum = 0.0f;
+            for (uint32_t j = 0; j < ctx.hidden_dim; j++) {
+                sum += input[j] * ctx.gate_proj_cold[j * ctx.n_cold + c];
+            }
+            gate_pre[c] = sum;
+        }
+        auto activated = detect_activated_cold_neurons(
+            gate_pre.data(), ctx.n_cold, ctx.activation, ctx.silu_threshold);
+        result.cold_neurons_activated = static_cast<uint32_t>(activated.size());
+    }
 
     // Combine
     sparse_ffn_combine(gpu_partial.data(), cpu_partial.data(),
