@@ -197,11 +197,24 @@ std::unique_ptr<IExecutionBackend> create_platform_backend(ComputeBackend backen
 }
 
 std::unique_ptr<IExecutionBackend> create_platform_backend() {
-    #if defined(GGML_CUDA)
-        return std::make_unique<NvidiaCudaBackend>();
-    #else
-        return nullptr;
-    #endif
+    return std::make_unique<NvidiaCudaBackend>();
 }
 
 #endif  // GGML_CUDA
+
+// =============================================================================
+// Factory Fallback (when GGML_CUDA is not defined)
+// =============================================================================
+// Provides the create_platform_backend symbols when CUDA is not compiled.
+// These are separate definitions that return nullptr.
+// =============================================================================
+
+#if !defined(GGML_CUDA)
+std::unique_ptr<IExecutionBackend> create_platform_backend(ComputeBackend) {
+    return nullptr;
+}
+
+std::unique_ptr<IExecutionBackend> create_platform_backend() {
+    return nullptr;
+}
+#endif

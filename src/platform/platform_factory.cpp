@@ -250,8 +250,13 @@ std::unique_ptr<IExecutionBackend> create_platform_executor_auto() {
         }
     }
     
-    // Fallback: CPU-only
-    return create_platform_backend(ComputeBackend::CPU);
+    // Fallback: CPU-only (no GPU acceleration)
+    // Note: CPU-only backend may not be implemented yet
+    auto cpu = create_platform_backend(ComputeBackend::CPU);
+    if (cpu) return cpu;
+    
+    // If no backend available at all, return nullptr
+    return nullptr;
 }
 
 // Create an executor for a specific platform
@@ -328,3 +333,5 @@ std::vector<GpuInfo> enumerate_gpus() {
     
     return gpus;
 }
+
+
