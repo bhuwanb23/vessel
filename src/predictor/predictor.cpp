@@ -101,7 +101,14 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     pred.viable = check_viability(hw, pred.memory_total_bytes);
     
     // Calculate confidence level (Phase F)
-    ConfidenceResult conf = calculate_confidence(model, hw, ctx_len, 0);  // 0 calibration records for now
+    // Check if hot/cold profiling mask exists
+    bool has_profiling_mask = false;
+    if (strategy.placement == PlacementStrategy::HOT_COLD_SPLIT) {
+        // Check for mask file (would need to check filesystem, simplified here)
+        has_profiling_mask = false;  // Will be set by executor if mask exists
+    }
+    ConfidenceResult conf = calculate_confidence(model, hw, ctx_len, 0,
+                                                 strategy.placement, has_profiling_mask);
     pred.confidence = conf.level;
     pred.confidence_reason = conf.reason;
     
