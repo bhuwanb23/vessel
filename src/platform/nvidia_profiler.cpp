@@ -335,64 +335,8 @@ std::unique_ptr<IHardwareProfiler> create_platform_profiler(Platform platform) {
 // =============================================================================
 // Legacy Interface (delegates to platform profiler)
 // =============================================================================
+// These functions are defined in the existing profiler files (ram_profiler.cpp,
+// gpu_profiler.cpp, disk_profiler.cpp). We don't redefine them here.
+// The nvidia_profiler.cpp only provides the IHardwareProfiler implementation.
+// =============================================================================
 
-static std::unique_ptr<IHardwareProfiler> get_profiler() {
-    static auto profiler = create_platform_profiler();
-    return std::move(profiler);  // Can't move from static, need different approach
-}
-
-// Actually, let's use a simpler approach
-static NvidiaProfiler* get_nvidia_profiler() {
-    static NvidiaProfiler profiler;
-    return &profiler;
-}
-
-HardwareSpec profile_hardware(const std::string& model_path_for_disk_bench) {
-    return get_nvidia_profiler()->profile(model_path_for_disk_bench);
-}
-
-uint64_t profile_ram_total() {
-    MEMORYSTATUSEX mem_status;
-    mem_status.dwLength = sizeof(mem_status);
-    if (GlobalMemoryStatusEx(&mem_status)) {
-        return mem_status.ullTotalPhys;
-    }
-    return 0;
-}
-
-uint64_t profile_ram_free() {
-    MEMORYSTATUSEX mem_status;
-    mem_status.dwLength = sizeof(mem_status);
-    if (GlobalMemoryStatusEx(&mem_status)) {
-        return mem_status.ullAvailPhys;
-    }
-    return 0;
-}
-
-std::string profile_gpu_name() {
-    return get_nvidia_profiler()->getFreeVRAM() > 0 ? "NVIDIA GPU" : "";
-}
-
-uint64_t profile_vram_total() {
-    // Will be implemented in full refactor
-    return 0;
-}
-
-uint64_t profile_vram_free() {
-    return get_nvidia_profiler()->getFreeVRAM();
-}
-
-double profile_gpu_bandwidth() {
-    // Will be implemented in full refactor
-    return 0.0;
-}
-
-double profile_disk_sequential(const std::string& file_path) {
-    // Will be implemented in full refactor
-    return 0.0;
-}
-
-double profile_disk_random_4k(const std::string& file_path) {
-    // Will be implemented in full refactor
-    return 0.0;
-}

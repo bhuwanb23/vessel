@@ -101,9 +101,18 @@ set(HOTCOLD_SOURCES
     src/hotcold/hotcold_executor.cpp
 )
 
+# Step 11: Platform Abstraction
+set(PLATFORM_SOURCES
+    src/platform/nvidia_profiler.cpp
+    # Future: src/platform/amd_profiler.cpp
+    # Future: src/platform/apple_profiler.cpp
+    # Future: src/platform/cpu_profiler.cpp
+)
+
 set(SHARED_INCLUDE_DIRS
     include
     include/hotcold
+    include/platform
     src/profiler
     src/fetcher
     src/predictor
@@ -133,6 +142,7 @@ add_executable(llm-planner
     ${FETCHER_SOURCES}
     ${PREDICTOR_SOURCES}
     ${HOTCOLD_SOURCES}
+    ${PLATFORM_SOURCES}
 )
 
 target_include_directories(llm-planner PRIVATE ${SHARED_INCLUDE_DIRS})
@@ -149,6 +159,7 @@ add_executable(e2e_test
     ${FETCHER_SOURCES}
     ${PREDICTOR_SOURCES}
     ${HOTCOLD_SOURCES}
+    ${PLATFORM_SOURCES}
 )
 
 target_include_directories(e2e_test PRIVATE ${SHARED_INCLUDE_DIRS})
