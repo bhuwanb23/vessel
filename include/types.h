@@ -29,7 +29,9 @@ enum class ModelType {
 enum class PlacementStrategy {
     FULL_GPU,       // All layers on GPU (fastest, needs enough VRAM)
     GPU_CPU_SPLIT,  // Some layers on GPU, rest on CPU (flexible)
-    CPU_ONLY        // All layers on CPU (slowest, needs enough RAM)
+    CPU_ONLY,       // All layers on CPU (slowest, needs enough RAM)
+    HOT_COLD_SPLIT, // PowerInfer-style neuron-level split (requires profiling mask)
+    LAYER_STREAM    // AirLLM-style sequential layer loading from disk (extreme fallback)
 };
 
 // =============================================================================
