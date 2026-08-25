@@ -99,9 +99,7 @@ std::unique_ptr<IHardwareProfiler> create_platform_profiler(Platform platform);
 // =============================================================================
 // These free functions delegate to the platform profiler.
 // They maintain compatibility with existing code that calls profile_hardware().
-
-// Profile all hardware subsystems (delegates to platform profiler)
-HardwareSpec profile_hardware(const std::string& model_path_for_disk_bench = "");
+// Note: profile_hardware() is declared in profiler.h to avoid duplicate declarations.
 
 // Profile RAM only
 uint64_t profile_ram_total();

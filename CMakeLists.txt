@@ -107,6 +107,7 @@ set(PLATFORM_SOURCES
     src/platform/nvidia_profiler.cpp
     src/platform/nvidia_executor.cpp
     src/platform/platform_factory.cpp
+    src/platform/cpu_profiler.cpp
     # AMD/Linux (ROCm/HIP) — only compiled on Linux
     # src/platform/amd_profiler.cpp
     # src/platform/amd_executor.cpp
@@ -329,6 +330,7 @@ add_executable(step11_test
     src/platform/platform_factory.cpp
     src/platform/nvidia_profiler.cpp
     src/platform/nvidia_executor.cpp
+    src/platform/cpu_profiler.cpp
     src/predictor/predictor.cpp
     src/predictor/speed_predictor.cpp
     src/predictor/memory_predictor.cpp

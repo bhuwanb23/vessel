@@ -334,4 +334,37 @@ std::vector<GpuInfo> enumerate_gpus() {
     return gpus;
 }
 
+// =============================================================================
+// Platform Profiler Factory (Central Definition)
+// =============================================================================
+// This is the main factory function declared in hardware_profiler_interface.h.
+// It delegates to platform-specific factory functions.
+// =============================================================================
+
+// Forward declarations of platform-specific factory functions
+// (defined in nvidia_profiler.cpp, cpu_profiler.cpp, etc.)
+extern std::unique_ptr<IHardwareProfiler> create_nvidia_profiler();
+extern std::unique_ptr<IHardwareProfiler> create_cpu_profiler();
+
+std::unique_ptr<IHardwareProfiler> create_platform_profiler(Platform platform) {
+    switch (platform) {
+        case Platform::NVIDIA_WINDOWS:
+        case Platform::NVIDIA_LINUX: {
+            auto p = create_nvidia_profiler();
+            if (p && p->isAvailable()) return p;
+            break;
+        }
+        case Platform::CPU_ONLY: {
+            return create_cpu_profiler();
+        }
+        default:
+            break;
+    }
+    return nullptr;
+}
+
+std::unique_ptr<IHardwareProfiler> create_platform_profiler() {
+    return create_platform_profiler_auto();
+}
+
 
