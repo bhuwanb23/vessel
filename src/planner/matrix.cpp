@@ -469,23 +469,10 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     }
                     
                     // Strategy: Layer-Streaming Fallback
-                    // Always viable (extreme fallback), but very slow
+                    // Uses the new prediction function for accurate timing
                     {
-                        double estimated_tok_s = 0.0;
-                        if (hw.nvme_sequential_mbs > 0) {
-                            // Rough estimate: one layer = ~200MB for 7B model
-                            // Streaming 28 layers = 28 * (200MB / NVMe_speed) + compute time
-                            uint64_t layer_bytes = estimate_layer_weight_bytes_helper(
-                                model.embedding_dim, model.ffn_dim,
-                                model.attention_heads, model.kv_heads > 0 ? model.kv_heads : model.attention_heads,
-                                model.bits_per_weight / 8.0);
-                            double layer_mb = static_cast<double>(layer_bytes) / (1024.0 * 1024.0);
-                            double time_per_layer_ms = (layer_mb / hw.nvme_sequential_mbs) * 1000.0;
-                            // Add GPU compute time per layer (~5ms for 7B)
-                            time_per_layer_ms += 5.0;
-                            double total_ms = time_per_layer_ms * model.layers;
-                            estimated_tok_s = (total_ms > 0) ? 1000.0 / total_ms : 0.0;
-                        }
+                        LayerStreamingPrediction ls_pred = predict_layer_streaming(
+                            hw, model, ctx, kv_bits);
                         
                         StrategyConfig strat;
                         strat.placement = PlacementStrategy::CPU_ONLY;
@@ -495,8 +482,8 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                         strat.kv_quant_bits = kv_bits;
                         
                         Prediction pred = predict(hw, model, strat, cal);
-                        pred.tokens_per_sec = estimated_tok_s;
-                        pred.viable = (estimated_tok_s > 0);
+                        pred.tokens_per_sec = ls_pred.tok_s;
+                        pred.viable = ls_pred.viable;
                         
                         StrategyResult result;
                         result.strategy = strat;
@@ -504,6 +491,9 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                         
                         std::ostringstream oss;
                         oss << "Layer-Stream (extreme fallback)";
+                        if (!ls_pred.is_worthwhile) {
+                            oss << " ⚠️";
+                        }
                         oss << " (ctx=" << ctx;
                         if (kv_bits == 8) oss << ", KV=Q8";
                         oss << ")";

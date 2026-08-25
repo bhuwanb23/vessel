@@ -261,3 +261,139 @@ HotColdMemoryResult predict_hotcold_memory(
 
     return result;
 }
+
+// =============================================================================
+// Layer-Streaming Prediction
+// =============================================================================
+
+static const double LAYER_STREAM_MIN_USEFUL_TOK_S = 0.01;  // One token per 100 seconds
+
+LayerStreamingPrediction predict_layer_streaming(
+    const HardwareSpec& hw,
+    const ModelSpec& model,
+    uint32_t context_length,
+    uint32_t kv_quant_bits)
+{
+    LayerStreamingPrediction result;
+
+    if (model.layers == 0 || model.embedding_dim == 0 || model.ffn_dim == 0) {
+        result.reason = "Missing model dimensions";
+        return result;
+    }
+
+    double bytes_per_param = model.bits_per_weight / 8.0;
+
+    // Calculate total model weight bytes
+    uint64_t total_weight_bytes = static_cast<uint64_t>(model.param_count * bytes_per_param);
+
+    // Calculate resident memory (embedding + output head + KV cache + CUDA overhead)
+    uint32_t kv_heads = (model.kv_heads > 0) ? model.kv_heads : model.attention_heads;
+    uint32_t head_dim = (model.head_dim > 0) ? model.head_dim :
+                        (model.attention_heads > 0 ? model.embedding_dim / model.attention_heads : 128);
+
+    // Embedding + output head (estimate: vocab_size ≈ 128K for most models)
+    // Note: ModelSpec doesn't store vocab_size, so we estimate
+    uint32_t estimated_vocab = 128000;  // Common for Llama/Qwen models
+    uint64_t embedding_bytes = static_cast<uint64_t>(estimated_vocab) *
+                               model.embedding_dim * static_cast<uint64_t>(bytes_per_param);
+    uint64_t output_head_bytes = embedding_bytes;
+
+    // KV cache
+    double bytes_per_kv_element;
+    switch (kv_quant_bits) {
+        case 4:  bytes_per_kv_element = 0.5; break;
+        case 8:  bytes_per_kv_element = 1.0; break;
+        default: bytes_per_kv_element = 2.0; break;
+    }
+    uint64_t kv_cache_bytes = 2ULL * model.layers * kv_heads * head_dim *
+                              context_length * static_cast<uint64_t>(bytes_per_kv_element);
+
+    // CUDA overhead
+    uint64_t cuda_overhead = 512ULL * 1024 * 1024;
+
+    // Total resident memory
+    uint64_t resident_bytes = embedding_bytes + output_head_bytes +
+                              kv_cache_bytes + cuda_overhead;
+
+    // Check if resident memory fits in VRAM + RAM
+    uint64_t total_budget = hw.vram_free_bytes + hw.ram_free_bytes;
+    uint64_t overhead = 1024ULL * 1024 * 1024;  // 1 GB for OS, etc.
+    uint64_t available_budget = (total_budget > overhead) ? total_budget - overhead : 0;
+
+    if (resident_bytes > available_budget) {
+        result.viable = false;
+        double needed_gb = resident_bytes / (1024.0 * 1024.0 * 1024.0);
+        double free_gb = available_budget / (1024.0 * 1024.0 * 1024.0);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "Resident memory (%.1f GB) exceeds available budget (%.1f GB)."
+                 " Model cannot run even with layer streaming.",
+                 needed_gb, free_gb);
+        result.reason = buf;
+        return result;
+    }
+
+    result.viable = true;
+
+    // Calculate per-layer weight bytes
+    uint64_t layer_bytes = static_cast<uint64_t>(total_weight_bytes / model.layers);
+    result.disk_read_bytes_per_token = layer_bytes * model.layers;
+
+    // Disk read time per layer
+    double layer_mb = static_cast<double>(layer_bytes) / (1024.0 * 1024.0);
+    double disk_read_time_ms = 0.0;
+    if (hw.nvme_sequential_mbs > 0) {
+        disk_read_time_ms = (layer_mb / hw.nvme_sequential_mbs) * 1000.0;
+    } else {
+        // Fallback: assume 1 GB/s
+        disk_read_time_ms = (layer_mb / 1000.0) * 1000.0;
+    }
+
+    // GPU compute time per layer (negligible vs disk read, but include it)
+    uint32_t kv_dim = kv_heads * head_dim;
+    uint64_t attention_params =
+        static_cast<uint64_t>(model.embedding_dim) * model.embedding_dim * 2 +
+        static_cast<uint64_t>(model.embedding_dim) * kv_dim * 2;
+    uint64_t ffn_params = 3ULL * static_cast<uint64_t>(model.embedding_dim) * model.ffn_dim;
+    double flops_per_token = 2.0 * static_cast<double>(attention_params + ffn_params);
+    double gpu_compute_ms = 0.0;
+    if (hw.gpu_tflops_fp16 > 0) {
+        gpu_compute_ms = (flops_per_token / (hw.gpu_tflops_fp16 * 1e12)) * 1000.0;
+    }
+
+    // Total time per layer
+    result.time_per_layer_ms = disk_read_time_ms + gpu_compute_ms;
+
+    // Total time per token (all layers)
+    result.total_time_per_token_ms = result.time_per_layer_ms * model.layers;
+
+    // Tokens per second
+    result.tok_s = (result.total_time_per_token_ms > 0.0) ?
+        1000.0 / result.total_time_per_token_ms : 0.0;
+    result.seconds_per_token = (result.tok_s > 0) ? 1.0 / result.tok_s : 0.0;
+
+    // Check if this is worthwhile
+    if (result.tok_s >= LAYER_STREAM_MIN_USEFUL_TOK_S) {
+        result.is_worthwhile = true;
+        result.worthit_reason = "Speed is usable for interactive chat";
+    } else if (result.tok_s >= 0.001) {
+        result.is_worthwhile = false;
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "Very slow: ~%.1f seconds per token. "
+                 "Usable for batch jobs, not interactive.",
+                 result.seconds_per_token);
+        result.worthit_reason = buf;
+    } else {
+        result.is_worthwhile = false;
+        double minutes_per_token = result.seconds_per_token / 60.0;
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "Extremely slow: ~%.1f minutes per token. "
+                 "Not practically useful.",
+                 minutes_per_token);
+        result.worthit_reason = buf;
+    }
+
+    return result;
+}

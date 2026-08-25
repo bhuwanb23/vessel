@@ -55,3 +55,29 @@ HotColdMemoryResult predict_hotcold_memory(
     uint32_t context_length,
     uint32_t kv_quant_bits
 );
+
+// =============================================================================
+// Layer-Streaming Prediction
+// =============================================================================
+// Predicts performance for layer-streaming fallback (AirLLM-style).
+// This is the extreme fallback when even hot/cold split doesn't fit.
+// =============================================================================
+
+struct LayerStreamingPrediction {
+    double tok_s = 0.0;              // Estimated tokens per second
+    double seconds_per_token = 0.0;  // Inverse of tok_s (for display)
+    double time_per_layer_ms = 0.0;  // Time to read + compute one layer
+    double total_time_per_token_ms = 0.0; // time_per_layer × layers
+    uint64_t disk_read_bytes_per_token = 0; // Total bytes read from disk
+    bool is_worthwhile = false;      // Is speed above minimum threshold?
+    std::string worthit_reason;      // Why/why not
+    bool viable = false;             // Can the model run at all?
+    std::string reason;              // Why not viable
+};
+
+LayerStreamingPrediction predict_layer_streaming(
+    const HardwareSpec& hw,
+    const ModelSpec& model,
+    uint32_t context_length,
+    uint32_t kv_quant_bits
+);

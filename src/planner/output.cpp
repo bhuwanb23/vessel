@@ -127,6 +127,24 @@ static void fmt_speed_range(char* buf, size_t n, double worst, double best, doub
     }
 }
 
+// Format speed for layer-streaming (shows seconds/tok for very slow speeds)
+static void fmt_speed_layer_stream(char* buf, size_t n, double tps) {
+    if (tps <= 0) {
+        snprintf(buf, n, "-");
+    } else if (tps < 0.01) {
+        // Very slow: show minutes per token
+        double min_per_tok = 1.0 / (tps * 60.0);
+        snprintf(buf, n, "~%.1f min/tok", min_per_tok);
+    } else if (tps < 1.0) {
+        // Slow: show seconds per token
+        double sec_per_tok = 1.0 / tps;
+        snprintf(buf, n, "~%.1f s/tok", sec_per_tok);
+    } else {
+        // Normal speed
+        fmt_speed(buf, n, tps);
+    }
+}
+
 static void fmt_ttft(char* buf, size_t n, double ms) {
     if (ms <= 0)         snprintf(buf, n, "-");
     else if (ms < 1000)  snprintf(buf, n, "~%.0fms", ms);
@@ -287,6 +305,10 @@ void print_prediction_table(const std::vector<StrategyResult>& results,
         } else if (p.is_moe_range) {
             // MoE: show range [worst - best]
             fmt_speed_range(speed, sizeof(speed), p.tok_s_worst, p.tok_s_best, p.tok_s_expected);
+            fmt_ttft(ttft,   sizeof(ttft),  p.ttft_ms);
+        } else if (r.description.find("Layer-Stream") != std::string::npos) {
+            // Layer-streaming: show seconds/tok for very slow speeds
+            fmt_speed_layer_stream(speed, sizeof(speed), p.tokens_per_sec);
             fmt_ttft(ttft,   sizeof(ttft),  p.ttft_ms);
         } else {
             fmt_speed(speed, sizeof(speed), p.tokens_per_sec);
