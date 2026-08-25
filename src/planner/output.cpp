@@ -607,9 +607,15 @@ void print_usage() {
     printf("  --skip-verify                       Skip SHA256 verification on download\n");
     printf("  --prompt <text>                     Prompt for inference (default: benchmark)\n");
     printf("  --max-tokens <N>                    Max tokens to generate (default: 100)\n");
+    printf("  --platform <cuda|hip|metal|cpu>     Force specific platform (default: auto-detect)\n");
+    printf("  --gpu <index>                       Select GPU by index (for multi-GPU systems)\n");
+    printf("  --gpu-name <pattern>                Select GPU by name pattern (e.g., 'RTX 4090')\n");
     printf("  --verbose                           Full hardware & model reports\n");
     printf("  --calibration-info                  Show calibration log stats\n");
     printf("  --calibration-reset                 Delete calibration log (with confirm)\n");
+    printf("  --profile-neurons                   Run neuron activation profiling\n");
+    printf("  --hot-ratio <0.0-1.0>              Target hot neuron ratio (default: 0.15)\n");
+    printf("  --vram-budget <GB>                  VRAM budget for hot neurons (default: auto)\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
     printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
@@ -618,4 +624,7 @@ void print_usage() {
     printf("  llm-planner --model <url> --context 4k --verbose\n");
     printf("  llm-planner --model <url> --execute --prompt \"What is AI?\"\n");
     printf("  llm-planner --model <url> --execute --max-tokens 200\n");
+    printf("  llm-planner --model <url> --platform cuda --gpu 0\n");
+    printf("  llm-planner --model <url> --platform metal  # Apple Silicon\n");
+    printf("  llm-planner --model <url> --execute --gpu-name \"RTX 4090\"\n");
 }

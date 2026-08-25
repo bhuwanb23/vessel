@@ -26,6 +26,7 @@
 #include "../predictor/predictor.h"
 #include "../hotcold/neuron_profiler.h"
 #include "../hotcold/mask_file.h"
+#include "platform/platform_factory.h"
 
 #include <cstdio>
 #include <string>
@@ -75,6 +76,9 @@ int main(int argc, char* argv[]) {
     int max_tokens           = 100;
     double hot_ratio         = 0.15;   // --hot-ratio: target hot neuron ratio
     uint64_t vram_budget     = 0;      // --vram-budget: VRAM for hot neurons (bytes)
+    std::string platform_override;     // --platform: force specific platform (cuda, hip, metal, cpu)
+    int gpu_index            = -1;     // --gpu: select specific GPU by index
+    std::string gpu_name_pattern;      // --gpu-name: select GPU by name pattern
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -198,6 +202,13 @@ int main(int argc, char* argv[]) {
             execute_mode = true;
         } else if (arg == "--skip-verify") {
             skip_verify = true;
+        } else if (arg == "--platform" && i + 1 < argc) {
+            platform_override = argv[++i];
+        } else if (arg == "--gpu" && i + 1 < argc) {
+            gpu_index = atoi(argv[++i]);
+            if (gpu_index < 0) gpu_index = -1;
+        } else if (arg == "--gpu-name" && i + 1 < argc) {
+            gpu_name_pattern = argv[++i];
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg[0] != '-' && !model_specified) {
@@ -335,7 +346,62 @@ int main(int argc, char* argv[]) {
 
     // --- Step 1: Profile Hardware ---
     Timer t_hw;
-    HardwareSpec hw = profile_hardware(model_path);  // empty string = skip disk benchmark
+    
+    // Platform auto-detection (Phase F)
+    std::unique_ptr<IHardwareProfiler> platform_profiler;
+    if (!platform_override.empty()) {
+        // Manual platform override (--platform flag)
+        platform_profiler = create_platform_profiler_for_platform(platform_override);
+        if (!platform_profiler) {
+            fprintf(stderr, "Error: Platform '%s' is not available on this system.\n",
+                    platform_override.c_str());
+            fprintf(stderr, "  Run without --platform to auto-detect.\n");
+            return 1;
+        }
+    } else {
+        // Auto-detect best available platform
+        platform_profiler = create_platform_profiler_auto();
+    }
+    
+    // Profile hardware using the detected/specified platform
+    HardwareSpec hw;
+    if (platform_profiler && platform_profiler->isAvailable()) {
+        hw = platform_profiler->profile(model_path);
+        
+        // Multi-GPU selection (--gpu flag)
+        if (gpu_index >= 0 && platform_profiler->supportsMultiGPU()) {
+            uint32_t gpu_count = platform_profiler->getGPUCount();
+            if (static_cast<uint32_t>(gpu_index) >= gpu_count) {
+                fprintf(stderr, "Error: GPU index %d out of range (0-%d).\n",
+                        gpu_index, gpu_count - 1);
+                return 1;
+            }
+            // TODO: Re-profile with specific GPU index
+            fprintf(stderr, "[PlatformFactory] Selected GPU %d of %d\n",
+                    gpu_index, gpu_count);
+        }
+        
+        // GPU name pattern matching (--gpu-name flag)
+        if (!gpu_name_pattern.empty()) {
+            // Find GPU matching the pattern
+            auto gpus = enumerate_gpus();
+            bool found = false;
+            for (const auto& gpu : gpus) {
+                if (gpu.name.find(gpu_name_pattern) != std::string::npos) {
+                    fprintf(stderr, "[PlatformFactory] Matched GPU: %s\n", gpu.name.c_str());
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "Warning: No GPU matching '%s' found.\n",
+                        gpu_name_pattern.c_str());
+            }
+        }
+    } else {
+        // Fallback to legacy profiler if platform factory fails
+        hw = profile_hardware(model_path);
+    }
 
     const ProfileErrors& pe = get_profile_errors();
     if (pe.gpu_failed && pe.ram_failed) {

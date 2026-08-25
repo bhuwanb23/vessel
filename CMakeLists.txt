@@ -106,6 +106,7 @@ set(HOTCOLD_SOURCES
 set(PLATFORM_SOURCES
     src/platform/nvidia_profiler.cpp
     src/platform/nvidia_executor.cpp
+    src/platform/platform_factory.cpp
     # AMD/Linux (ROCm/HIP) — only compiled on Linux
     # src/platform/amd_profiler.cpp
     # src/platform/amd_executor.cpp
