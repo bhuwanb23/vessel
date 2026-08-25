@@ -627,10 +627,15 @@ int main(int argc, char* argv[]) {
 
     // Print what we're about to do
     const auto& strat = selected.strategy;
-    const char* placement_name =
-        strat.placement == PlacementStrategy::FULL_GPU     ? "Full GPU" :
-        strat.placement == PlacementStrategy::GPU_CPU_SPLIT ? "GPU+CPU Split" :
-                                                               "CPU Only";
+    const char* placement_name;
+    switch (strat.placement) {
+        case PlacementStrategy::FULL_GPU:       placement_name = "Full GPU"; break;
+        case PlacementStrategy::GPU_CPU_SPLIT:  placement_name = "GPU+CPU Split"; break;
+        case PlacementStrategy::CPU_ONLY:       placement_name = "CPU Only"; break;
+        case PlacementStrategy::HOT_COLD_SPLIT: placement_name = "Hot/Cold Split"; break;
+        case PlacementStrategy::LAYER_STREAM:   placement_name = "Layer-Stream"; break;
+        default:                               placement_name = "Unknown"; break;
+    }
 
     printf("\n--- Executing Strategy #%d ---\n", selection);
     printf("Placement:  %s (%u/%u layers)\n", placement_name, strat.gpu_layers, model.layers);

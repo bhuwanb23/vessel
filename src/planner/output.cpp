@@ -63,6 +63,25 @@ StrategyStatus determine_status(const HardwareSpec& hw, const Prediction& pred,
             if (hw.ram_free_bytes > 0)
                 ram_ratio = (double)pred.memory_ram_bytes / (double)hw.ram_free_bytes;
             break;
+
+        case PlacementStrategy::HOT_COLD_SPLIT:
+            // Hot/Cold: VRAM = attention + hot FFN + KV + overhead, RAM = cold FFN
+            fits_vram = (pred.memory_vram_bytes <= hw.vram_free_bytes);
+            if (hw.vram_free_bytes > 0 && pred.memory_vram_bytes > 0)
+                vram_ratio = (double)pred.memory_vram_bytes / (double)hw.vram_free_bytes;
+            fits_ram = (pred.memory_ram_bytes <= hw.ram_free_bytes);
+            if (hw.ram_free_bytes > 0 && pred.memory_ram_bytes > 0)
+                ram_ratio = (double)pred.memory_ram_bytes / (double)hw.ram_free_bytes;
+            break;
+
+        case PlacementStrategy::LAYER_STREAM:
+            // Layer-streaming: minimal resident memory (embedding + output head + KV + CUDA)
+            fits_ram = (pred.memory_ram_bytes <= hw.ram_free_bytes);
+            if (hw.ram_free_bytes > 0 && pred.memory_ram_bytes > 0)
+                ram_ratio = (double)pred.memory_ram_bytes / (double)hw.ram_free_bytes;
+            // VRAM usage is minimal (CUDA overhead only)
+            fits_vram = true;
+            break;
     }
 
     if (!fits_vram || !fits_ram)
