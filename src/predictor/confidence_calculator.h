@@ -21,7 +21,9 @@ ConfidenceResult calculate_confidence(
     const ModelSpec& model,
     const HardwareSpec& hw,
     uint32_t context_length,
-    uint32_t calibration_records = 0  // Number of calibration records for this hardware
+    uint32_t calibration_records = 0,  // Number of calibration records for this hardware
+    PlacementStrategy placement = PlacementStrategy::FULL_GPU,  // Strategy placement
+    bool has_profiling_mask = false  // Whether hot/cold profiling mask exists
 );
 
 // Helper: Check if hardware profile is complete
