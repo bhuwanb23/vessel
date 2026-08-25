@@ -378,6 +378,43 @@ target_include_directories(catalog_test PRIVATE
 )
 
 # ============================================
+# Step 12 Phase B — Recommendation Engine Test
+# ============================================
+add_executable(recommend_test
+    src/recommend/recommendation_test.cpp
+    src/recommend/recommendation_engine.cpp
+    src/recommend/catalog_loader.cpp
+    src/predictor/predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/confidence_calculator.cpp
+    src/predictor/moe_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/planner/moe_placer.cpp
+)
+
+target_include_directories(recommend_test PRIVATE
+    include
+    include/recommend
+    include/hotcold
+    src/predictor
+    src/planner
+    ${CUDA_PATH}/include
+    ${LLAMA_PATH}/include
+    ${LLAMA_PATH}/ggml/include
+)
+
+target_link_directories(recommend_test PRIVATE
+    ${CUDA_PATH}/lib/x64
+    ${LLAMA_BUILD}/src
+    ${LLAMA_BUILD}/ggml/src
+    ${LLAMA_BUILD}/ggml/src/ggml-cuda
+    ${LLAMA_BUILD}/bin
+)
+
+target_link_libraries(recommend_test PRIVATE llama ggml ggml-base ggml-cpu ggml-cuda winhttp ws2_32)
+
+# ============================================
 # Installation
 # ============================================
 install(TARGETS llm-planner e2e_test executor_test predictor_test DESTINATION bin)
