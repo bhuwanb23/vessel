@@ -48,17 +48,36 @@ uint64_t predict_kv_cache_memory(const ModelSpec& model, uint32_t context_length
     return kv_bytes;
 }
 
-uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size, bool use_gpu) {
+uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size, bool use_gpu,
+                                  bool is_unified_memory) {
     // Runtime overhead includes:
-    // - CUDA context initialization (~200-500 MB on NVIDIA)
+    // - GPU context initialization (varies by platform)
     // - ggml compute buffers (scales with batch size and context)
     // - Driver allocations
     // - Fragmentation waste
     //
+    // Platform-specific overhead (Phase G):
+    //   NVIDIA CUDA:  200-500 MB (large CUDA context)
+    //   AMD ROCm:     150-400 MB (slightly smaller)
+    //   Apple Metal:   50-200 MB (unified memory, smaller context)
+    //   CPU-only:     128 MB (minimal)
+    //
     // This constant is calibrated empirically, not derivable analytically.
-    // Starting estimate: 512 MB for CUDA backend, 128 MB for CPU-only.
+    //
+    uint64_t base_overhead = 0;
     
-    uint64_t base_overhead = use_gpu ? (512ULL * 1024 * 1024) : (128ULL * 1024 * 1024);
+    if (use_gpu) {
+        if (is_unified_memory) {
+            // Apple Silicon: smaller overhead (unified memory, no VRAM context)
+            base_overhead = 128ULL * 1024 * 1024;  // 128 MB
+        } else {
+            // Discrete GPU (NVIDIA/AMD): larger overhead (CUDA/HIP context)
+            base_overhead = 512ULL * 1024 * 1024;  // 512 MB
+        }
+    } else {
+        // CPU-only: minimal overhead
+        base_overhead = 128ULL * 1024 * 1024;  // 128 MB
+    }
     
     // Activation memory scales with batch_size * embedding_dim * layers
     // Rough estimate: 4 bytes per activation element

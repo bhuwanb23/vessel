@@ -36,7 +36,7 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model, const Strateg
     
     // 3. Overhead memory
     bool use_gpu = (gpu_layers > 0);
-    uint64_t overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
+    uint64_t overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu, hw.is_unified_memory);
     
     // 4. Distribute memory based on strategy and platform
     if (hw.is_unified_memory) {
@@ -169,7 +169,7 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
     } else if (!use_gpu && cal.adjusted_cpu_overhead_bytes > 0) {
         overhead_bytes = cal.adjusted_cpu_overhead_bytes;
     } else {
-        overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu);
+        overhead_bytes = predict_overhead_memory(model, strategy.batch_size, use_gpu, hw.is_unified_memory);
     }
 
     // Distribute memory based on strategy and platform
