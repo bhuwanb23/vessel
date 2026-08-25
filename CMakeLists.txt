@@ -273,6 +273,32 @@ target_include_directories(layer_stream_test PRIVATE
 
 target_link_libraries(layer_stream_test PRIVATE ws2_32)
 
+# ============================================
+# Phase I Validation Test
+# ============================================
+add_executable(phase_i_test
+    src/hotcold/phase_i_validation.cpp
+    src/hotcold/sparse_ffn.cpp
+    src/hotcold/mask_file.cpp
+    src/hotcold/hotcold_predictor.cpp
+    src/hotcold/weight_splitter.cpp
+    src/predictor/predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/confidence_calculator.cpp
+    src/predictor/moe_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/planner/moe_placer.cpp
+)
+
+target_include_directories(phase_i_test PRIVATE
+    include
+    include/hotcold
+    src/predictor
+)
+
+target_link_libraries(phase_i_test PRIVATE ws2_32)
+
 target_include_directories(predictor_test PRIVATE
     include
     src/predictor
