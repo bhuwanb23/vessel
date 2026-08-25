@@ -102,11 +102,12 @@ set(HOTCOLD_SOURCES
 )
 
 # Step 11: Platform Abstraction
+# Note: AMD and CPU profilers are defined but not compiled on Windows
+# They would be compiled on Linux/macOS with appropriate backends
 set(PLATFORM_SOURCES
     src/platform/nvidia_profiler.cpp
-    # Future: src/platform/amd_profiler.cpp
-    # Future: src/platform/apple_profiler.cpp
-    # Future: src/platform/cpu_profiler.cpp
+    # Future: src/platform/amd_profiler.cpp (Linux with ROCm)
+    # Future: src/platform/cpu_profiler.cpp (fallback)
 )
 
 set(SHARED_INCLUDE_DIRS
