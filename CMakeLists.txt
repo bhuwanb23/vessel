@@ -322,6 +322,45 @@ target_include_directories(predictor_test PRIVATE
 )
 
 # ============================================
+# Step 11 Phase I Validation Test
+# ============================================
+add_executable(step11_test
+    src/platform/step11_validation.cpp
+    src/platform/platform_factory.cpp
+    src/platform/nvidia_profiler.cpp
+    src/platform/nvidia_executor.cpp
+    src/predictor/predictor.cpp
+    src/predictor/speed_predictor.cpp
+    src/predictor/memory_predictor.cpp
+    src/predictor/confidence_calculator.cpp
+    src/predictor/moe_predictor.cpp
+    src/predictor/context_analyzer.cpp
+    src/hotcold/hotcold_predictor.cpp
+    src/hotcold/weight_splitter.cpp
+    src/planner/moe_placer.cpp
+)
+
+target_include_directories(step11_test PRIVATE
+    include
+    include/hotcold
+    include/platform
+    src/predictor
+    src/planner
+    ${CUDA_PATH}/include
+    ${LLAMA_PATH}/include
+    ${LLAMA_PATH}/ggml/include
+)
+
+target_link_directories(step11_test PRIVATE
+    ${CUDA_PATH}/lib/x64
+    ${LLAMA_BUILD}/src
+    ${LLAMA_BUILD}/ggml/src
+    ${LLAMA_BUILD}/ggml/src/ggml-cuda
+    ${LLAMA_BUILD}/bin
+)
+target_link_libraries(step11_test PRIVATE nvml winhttp ws2_32)
+
+# ============================================
 # Installation
 # ============================================
 install(TARGETS llm-planner e2e_test executor_test predictor_test DESTINATION bin)
