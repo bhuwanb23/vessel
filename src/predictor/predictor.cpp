@@ -242,7 +242,14 @@ Prediction predict(const HardwareSpec& hw, const ModelSpec& model,
     // Viability and confidence
     pred.viable = check_viability(hw, pred.memory_total_bytes);
     int cal_count = cal.matching_record_count;
-    ConfidenceResult conf = calculate_confidence(model, hw, ctx_len, cal_count);
+    
+    // Check if hot/cold profiling mask exists
+    bool has_profiling_mask = false;
+    if (strategy.placement == PlacementStrategy::HOT_COLD_SPLIT) {
+        has_profiling_mask = false;  // Will be set by executor if mask exists
+    }
+    ConfidenceResult conf = calculate_confidence(model, hw, ctx_len, cal_count,
+                                                 strategy.placement, has_profiling_mask);
     pred.confidence = conf.level;
     pred.confidence_reason = conf.reason;
 
