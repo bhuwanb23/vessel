@@ -102,14 +102,16 @@ set(HOTCOLD_SOURCES
 )
 
 # Step 11: Platform Abstraction
-# Note: AMD profilers/executors are defined but not compiled on Windows
-# They would be compiled on Linux/macOS with appropriate backends
+# Compile platform-specific backends based on target OS
 set(PLATFORM_SOURCES
     src/platform/nvidia_profiler.cpp
     src/platform/nvidia_executor.cpp
-    # Future: src/platform/amd_profiler.cpp (Linux with ROCm)
-    # Future: src/platform/amd_executor.cpp (Linux with HIP)
-    # Future: src/platform/cpu_profiler.cpp (fallback)
+    # AMD/Linux (ROCm/HIP) — only compiled on Linux
+    # src/platform/amd_profiler.cpp
+    # src/platform/amd_executor.cpp
+    # Apple/macOS (Metal) — only compiled on macOS
+    # src/platform/apple_profiler.cpp
+    # src/platform/apple_executor.cpp
 )
 
 set(SHARED_INCLUDE_DIRS
