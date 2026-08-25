@@ -120,9 +120,11 @@ set(SHARED_INCLUDE_DIRS
     include
     include/hotcold
     include/platform
+    include/recommend
     src/profiler
     src/fetcher
     src/predictor
+    src/recommend
     ${CUDA_PATH}/include
     ${LLAMA_PATH}/include
     ${LLAMA_PATH}/ggml/include
@@ -361,6 +363,19 @@ target_link_directories(step11_test PRIVATE
     ${LLAMA_BUILD}/bin
 )
 target_link_libraries(step11_test PRIVATE nvml winhttp ws2_32)
+
+# ============================================
+# Step 12 Phase A — Catalog Test
+# ============================================
+add_executable(catalog_test
+    src/recommend/catalog_test.cpp
+    src/recommend/catalog_loader.cpp
+)
+
+target_include_directories(catalog_test PRIVATE
+    include
+    include/recommend
+)
 
 # ============================================
 # Installation
