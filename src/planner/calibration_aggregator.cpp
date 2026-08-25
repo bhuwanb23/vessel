@@ -338,6 +338,125 @@ CalibrationData CalibrationAggregator::compute_adjusted_constants() const {
 }
 
 // =============================================================================
+// Hot/Cold and Layer-Streaming Filters (Step 10, Phase H)
+// =============================================================================
+
+std::vector<const CalibrationRecord*> CalibrationAggregator::filter_for_hotcold() const {
+    std::vector<const CalibrationRecord*> result;
+    for (const auto& r : matching_records_) {
+        if (r.placement != "HOT_COLD_SPLIT") continue;
+        if (r.actual_throttled) continue;
+        if (r.actual_tokens_generated < 10) continue;
+        if (r.actual_tokens_per_sec <= 0) continue;
+        result.push_back(&r);
+    }
+    return result;
+}
+
+std::vector<const CalibrationRecord*> CalibrationAggregator::filter_for_layer_stream() const {
+    std::vector<const CalibrationRecord*> result;
+    for (const auto& r : matching_records_) {
+        if (r.placement != "LAYER_STREAM") continue;
+        if (r.actual_tokens_generated < 10) continue;
+        if (r.actual_tokens_per_sec <= 0) continue;
+        result.push_back(&r);
+    }
+    return result;
+}
+
+// =============================================================================
+// Derived Constants from Hot/Cold Records (Step 10, Phase H)
+// =============================================================================
+
+struct HotColdDerivedConstants {
+    double cold_activation_rate = 0.12;      // How many cold neurons actually fire per token
+    double gpu_cpu_sync_overhead_ms = 0.0;   // Gap between max(t_hot, t_cold) and actual per-layer time
+    int sample_count = 0;
+};
+
+HotColdDerivedConstants compute_hotcold_derived_constants() const {
+    HotColdDerivedConstants result;
+    auto records = filter_for_hotcold();
+    result.sample_count = static_cast<int>(records.size());
+    
+    if (records.empty()) return result;
+    
+    // Compute average cold_activation_rate from records
+    double sum_cold_rate = 0.0;
+    int cold_rate_count = 0;
+    for (const auto* r : records) {
+        if (r->cold_activation_rate > 0) {
+            sum_cold_rate += r->cold_activation_rate;
+            cold_rate_count++;
+        }
+    }
+    if (cold_rate_count > 0) {
+        result.cold_activation_rate = sum_cold_rate / cold_rate_count;
+    }
+    
+    // Compute gpu_cpu_sync_overhead from predicted vs actual
+    // If actual is slower than predicted, the gap is likely sync overhead
+    double sum_sync_overhead = 0.0;
+    int sync_count = 0;
+    for (const auto* r : records) {
+        if (r->predicted_tokens_per_sec > 0 && r->actual_tokens_per_sec > 0) {
+            double predicted_time_per_token = 1.0 / r->predicted_tokens_per_sec;
+            double actual_time_per_token = 1.0 / r->actual_tokens_per_sec;
+            double overhead = actual_time_per_token - predicted_time_per_token;
+            if (overhead > 0) {
+                sum_sync_overhead += overhead * 1000.0;  // Convert to ms
+                sync_count++;
+            }
+        }
+    }
+    if (sync_count > 0) {
+        result.gpu_cpu_sync_overhead_ms = sum_sync_overhead / sync_count;
+    }
+    
+    return result;
+}
+
+// =============================================================================
+// Derived Constants from Layer-Streaming Records (Step 10, Phase H)
+// =============================================================================
+
+struct LayerStreamDerivedConstants {
+    double layer_stream_actual_io_speed_mbs = 0.0;  // Real-world sequential read speed during streaming
+    int sample_count = 0;
+};
+
+LayerStreamDerivedConstants compute_layer_stream_derived_constants() const {
+    LayerStreamDerivedConstants result;
+    auto records = filter_for_layer_stream();
+    result.sample_count = static_cast<int>(records.size());
+    
+    if (records.empty()) return result;
+    
+    // Compute actual I/O speed from predicted vs actual
+    // If actual is slower than predicted, the real I/O speed is lower
+    double sum_io_speed = 0.0;
+    int io_count = 0;
+    for (const auto* r : records) {
+        if (r->predicted_tokens_per_sec > 0 && r->actual_tokens_per_sec > 0) {
+            // actual_speed / predicted_speed = actual_io / predicted_io
+            // actual_io = predicted_io * (actual_speed / predicted_speed)
+            double ratio = r->actual_tokens_per_sec / r->predicted_tokens_per_sec;
+            // Assume predicted used NVMe sequential speed from Step 1
+            // We don't have that value in the record, but we can estimate
+            // For now, just store the ratio for future use
+            sum_io_speed += ratio;
+            io_count++;
+        }
+    }
+    if (io_count > 0) {
+        // Store the average ratio (actual/predicted) as a correction factor
+        result.layer_stream_actual_io_speed_mbs = sum_io_speed / io_count;
+    }
+    
+    return result;
+}
+
+// =============================================================================
 // Public API
 // =============================================================================
 

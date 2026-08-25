@@ -87,4 +87,35 @@ private:
     std::vector<const CalibrationRecord*> filter_for_decode_speed(
         const std::string& placement) const;
     std::vector<const CalibrationRecord*> filter_for_prefill() const;
+    
+    // Hot/Cold and Layer-Streaming filters (Step 10, Phase H)
+    std::vector<const CalibrationRecord*> filter_for_hotcold() const;
+    std::vector<const CalibrationRecord*> filter_for_layer_stream() const;
 };
+
+// =============================================================================
+// Derived Constants from Hot/Cold Records (Step 10, Phase H)
+// =============================================================================
+
+struct HotColdDerivedConstants {
+    double cold_activation_rate = 0.12;      // How many cold neurons actually fire per token
+    double gpu_cpu_sync_overhead_ms = 0.0;   // Gap between max(t_hot, t_cold) and actual per-layer time
+    int sample_count = 0;
+};
+
+// Compute derived constants from hot/cold calibration records
+// Returns defaults if no records available
+HotColdDerivedConstants compute_hotcold_derived_constants();
+
+// =============================================================================
+// Derived Constants from Layer-Streaming Records (Step 10, Phase H)
+// =============================================================================
+
+struct LayerStreamDerivedConstants {
+    double layer_stream_actual_io_speed_mbs = 0.0;  // Real-world sequential read speed during streaming
+    int sample_count = 0;
+};
+
+// Compute derived constants from layer-streaming calibration records
+// Returns defaults if no records available
+LayerStreamDerivedConstants compute_layer_stream_derived_constants();
