@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(local-llm-planner LANGUAGES C CXX)
+project(vessel LANGUAGES C CXX)
 
 # ---- C++ standard ----
 set(CMAKE_CXX_STANDARD 17)
@@ -148,9 +148,9 @@ set(SHARED_LINK_DIRS
 set(LLAMA_LIBS llama ggml ggml-base ggml-cpu ggml-cuda)
 
 # ============================================
-# llm-planner — Main unified binary
+# vessel — Main unified binary
 # ============================================
-add_executable(llm-planner
+add_executable(vessel
     src/planner/main.cpp
     ${PLANNER_SOURCES}
     ${PROFILER_SOURCES}
@@ -161,9 +161,9 @@ add_executable(llm-planner
     ${RECOMMEND_SOURCES}
 )
 
-target_include_directories(llm-planner PRIVATE ${SHARED_INCLUDE_DIRS})
-target_link_directories(llm-planner PRIVATE ${SHARED_LINK_DIRS})
-target_link_libraries(llm-planner PRIVATE ${LLAMA_LIBS} nvml winhttp)
+target_include_directories(vessel PRIVATE ${SHARED_INCLUDE_DIRS})
+target_link_directories(vessel PRIVATE ${SHARED_LINK_DIRS})
+target_link_libraries(vessel PRIVATE ${LLAMA_LIBS} nvml winhttp)
 
 # ============================================
 # e2e_test — End-to-end test suite
@@ -424,4 +424,4 @@ target_link_libraries(recommend_test PRIVATE llama ggml ggml-base ggml-cpu ggml-
 # ============================================
 # Installation
 # ============================================
-install(TARGETS llm-planner e2e_test executor_test predictor_test DESTINATION bin)
+install(TARGETS vessel e2e_test executor_test predictor_test DESTINATION bin)

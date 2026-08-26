@@ -287,7 +287,7 @@ void print_model_full(const ModelSpec& model) {
 
 void print_prediction_table(const std::vector<StrategyResult>& results,
                             const HardwareSpec& hw, PriorityMode priority) {
-    printf("\n=== LLM Deployment Planner — Strategy Comparison ===\n\n");
+    printf("\n=== Vessel — Strategy Comparison ===\n\n");
     printf("Ranked by: %s (use --priority to change)\n\n", get_priority_name(priority));
 
     // Table header (Phase H: platform-aware column name)
@@ -623,7 +623,7 @@ void print_recommendation_table(
     const std::string& use_case
 ) {
     // Header
-    printf("\n=== LLM Deployment Planner — Model Recommendations ===\n\n");
+    printf("\n=== Vessel — Model Recommendations ===\n\n");
     print_hardware_brief(hw);
     printf("Priority: %s (use --priority to change)\n", priority.c_str());
     printf("Use case: %s (use --use-case to filter)\n", use_case.c_str());
@@ -768,7 +768,7 @@ void print_recommendation_table(
     if (!recs.empty()) {
         const auto& top = recs[0];
         printf("\nTo download and run the top pick:\n");
-        printf("  llm-planner --model %s --execute\n",
+        printf("  vessel --model %s --execute\n",
                top.variant.hf_url.c_str());
     }
     
@@ -782,7 +782,7 @@ void print_recommendation_table(
 }
 
 void print_usage() {
-    printf("Usage: llm-planner --model <url_or_path> [options]\n\n");
+    printf("Usage: vessel --model <url_or_path> [options]\n\n");
     printf("Required:\n");
     printf("  --model <url_or_path>               Hugging Face GGUF URL or local file\n\n");
     printf("Options:\n");
@@ -810,19 +810,19 @@ void print_usage() {
     printf("  --catalog <path>                    Path to custom catalog JSON file\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
-    printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
-    printf("  llm-planner --model <url> --model-path ./models/model.gguf\n");
-    printf("  llm-planner --model <url> --priority safety\n");
-    printf("  llm-planner --model <url> --context 4k --verbose\n");
-    printf("  llm-planner --model <url> --execute --prompt \"What is AI?\"\n");
-    printf("  llm-planner --model <url> --execute --max-tokens 200\n");
-    printf("  llm-planner --model <url> --platform cuda --gpu 0\n");
-    printf("  llm-planner --model <url> --platform metal  # Apple Silicon\n");
-    printf("  llm-planner --model <url> --execute --gpu-name \"RTX 4090\"\n");
-    printf("  llm-planner --recommend                       # What model should I run?\n");
-    printf("  llm-planner --recommend --use-case coding     # Best model for coding\n");
-    printf("  llm-planner --recommend --priority speed      # Fastest model for my GPU\n");
-    printf("  llm-planner --recommend --max-download 5      # Best model under 5GB\n");
-    printf("  llm-planner --recommend --top 3               # Show top 3 only\n");
-    printf("  llm-planner --recommend --catalog my.json     # Use custom catalog\n");
+    printf("  vessel --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
+    printf("  vessel --model <url> --model-path ./models/model.gguf\n");
+    printf("  vessel --model <url> --priority safety\n");
+    printf("  vessel --model <url> --context 4k --verbose\n");
+    printf("  vessel --model <url> --execute --prompt \"What is AI?\"\n");
+    printf("  vessel --model <url> --execute --max-tokens 200\n");
+    printf("  vessel --model <url> --platform cuda --gpu 0\n");
+    printf("  vessel --model <url> --platform metal  # Apple Silicon\n");
+    printf("  vessel --model <url> --execute --gpu-name \"RTX 4090\"\n");
+    printf("  vessel --recommend                       # What model should I run?\n");
+    printf("  vessel --recommend --use-case coding     # Best model for coding\n");
+    printf("  vessel --recommend --priority speed      # Fastest model for my GPU\n");
+    printf("  vessel --recommend --max-download 5      # Best model under 5GB\n");
+    printf("  vessel --recommend --top 3               # Show top 3 only\n");
+    printf("  vessel --recommend --catalog my.json     # Use custom catalog\n");
 }

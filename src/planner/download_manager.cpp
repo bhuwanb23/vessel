@@ -74,7 +74,7 @@ uint64_t get_file_size_via_head(const std::string& url) {
         return 0;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Vessel/1.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
@@ -329,7 +329,7 @@ std::string fetch_expected_sha256(const std::string& url) {
     if (!parse_url(api_url, parsed)) return "";
     
     // HTTP GET to API
-    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Vessel/1.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
@@ -767,7 +767,7 @@ static DownloadResult do_download(
     }
 
     // Open WinHTTP session
-    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Vessel/1.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
@@ -1235,7 +1235,7 @@ ModelShards detect_model_shards(const std::string& any_shard_url) {
         return result;
     }
     
-    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Vessel/1.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);

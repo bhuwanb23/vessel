@@ -486,11 +486,11 @@ int count_records_for_hardware(const std::string& fingerprint,
 // =============================================================================
 
 std::string get_log_path() {
-    // Try %APPDATA%\llm-planner\calibration.jsonl
+    // Try %APPDATA%\vessel\calibration.jsonl
     char appdata[MAX_PATH] = {};
     HRESULT hr = SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appdata);
     if (SUCCEEDED(hr) && appdata[0] != '\0') {
-        std::string dir = std::string(appdata) + "\\llm-planner";
+        std::string dir = std::string(appdata) + "\\vessel";
 
         // Create directory if it doesn't exist
         CreateDirectoryA(dir.c_str(), NULL);  // succeeds if already exists
