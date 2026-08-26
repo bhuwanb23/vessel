@@ -350,7 +350,7 @@ CatalogModel parse_model(const JsonValue& val) {
     m.expert_ffn_dim = val.get_uint32("expert_ffn_dim");
     
     // Use cases
-    auto* use_cases_arr = val.get_array("use_cases");
+    auto* use_cases_arr = val.get_array("use_case");
     if (use_cases_arr) {
         for (const auto& uc : use_cases_arr->array_val) {
             if (uc.type == JsonType::STRING) {
