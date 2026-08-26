@@ -351,6 +351,91 @@ int main() {
     }
     
     // =========================================================================
+    // Test 12: Empty Catalog
+    // =========================================================================
+    printf("\n=== Test 12: Empty Catalog ===\n");
+    {
+        ModelCatalog empty_catalog;
+        empty_catalog.version = "test";
+        // empty_catalog.models is empty by default
+        
+        HardwareSpec hw = create_mock_hw(10, 32);
+        RecommendationRequest req;
+        req.priority = "balanced";
+        req.use_case = "all";
+        req.top_n = 5;
+        
+        auto recs = generate_recommendations(hw, empty_catalog, req);
+        
+        TEST_ASSERT(recs.empty(), "Empty catalog returns no recommendations");
+        printf("  Empty catalog: %zu recommendations (expected 0)\n", recs.size());
+    }
+    
+    // =========================================================================
+    // Test 13: Custom Catalog (from file)
+    // =========================================================================
+    printf("\n=== Test 13: Custom Catalog ===\n");
+    {
+        // Load the built-in catalog file
+        ModelCatalog file_catalog = load_catalog_from_file("data/models_catalog.json");
+        
+        // If file not found, skip (it's an embedded catalog test)
+        if (file_catalog.models.empty()) {
+            printf("  ⏭️  Skipped: data/models_catalog.json not found\n");
+        } else {
+            TEST_ASSERT(file_catalog.models.size() == catalog.models.size(),
+                       "File catalog matches embedded catalog");
+            
+            // Test with file catalog
+            HardwareSpec hw = create_mock_hw(10, 32);
+            RecommendationRequest req;
+            req.priority = "balanced";
+            req.use_case = "all";
+            req.top_n = 5;
+            
+            auto recs = generate_recommendations(hw, file_catalog, req);
+            TEST_ASSERT(!recs.empty(), "File catalog produces recommendations");
+            printf("  File catalog: %zu recommendations\n", recs.size());
+        }
+    }
+    
+    // =========================================================================
+    // Test 14: Recommendation → Execution Flow
+    // =========================================================================
+    printf("\n=== Test 14: Recommendation → Execution Flow ===\n");
+    {
+        HardwareSpec hw = create_mock_hw(10, 32);
+        RecommendationRequest req;
+        req.priority = "speed";
+        req.use_case = "all";
+        req.top_n = 1;
+        
+        auto recs = generate_recommendations(hw, catalog, req);
+        
+        if (!recs.empty()) {
+            const auto& top = recs[0];
+            
+            // Verify the top pick has a valid URL
+            TEST_ASSERT(!top.variant.hf_url.empty(), "Top pick has download URL");
+            TEST_ASSERT(top.variant.hf_url.find("https://") == 0, "URL is HTTPS");
+            
+            // Verify the prediction is reasonable
+            TEST_ASSERT(top.predicted_tok_s > 0, "Top pick has positive tok/s");
+            TEST_ASSERT(top.predicted_tok_s < 1000, "Top pick tok/s is sane (< 1000)");
+            
+            // Verify the model name appears in the URL
+            TEST_ASSERT(top.variant.hf_url.find(".gguf") != std::string::npos,
+                       "URL points to GGUF file");
+            
+            printf("  Top pick: %s %s\n", top.model.name.c_str(), top.variant.quant.c_str());
+            printf("  URL: %s\n", top.variant.hf_url.c_str());
+            printf("  Predicted: %.1f tok/s, %.1f GB VRAM\n",
+                   top.predicted_tok_s, top.predicted_vram_gb);
+            printf("  Strategy: %s\n", top.best_strategy_desc.c_str());
+        }
+    }
+    
+    // =========================================================================
     // Summary
     // =========================================================================
     printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
