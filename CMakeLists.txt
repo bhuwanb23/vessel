@@ -89,6 +89,12 @@ set(PLANNER_SOURCES
     src/planner/moe_tensor_overrides.cpp
 )
 
+# Step 12: Auto-Recommendation Engine
+set(RECOMMEND_SOURCES
+    src/recommend/catalog_loader.cpp
+    src/recommend/recommendation_engine.cpp
+)
+
 # Step 10: Hot/Cold CPU-GPU Offload
 set(HOTCOLD_SOURCES
     src/hotcold/profiler.cpp
@@ -152,6 +158,7 @@ add_executable(llm-planner
     ${PREDICTOR_SOURCES}
     ${HOTCOLD_SOURCES}
     ${PLATFORM_SOURCES}
+    ${RECOMMEND_SOURCES}
 )
 
 target_include_directories(llm-planner PRIVATE ${SHARED_INCLUDE_DIRS})

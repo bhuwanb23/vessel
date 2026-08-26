@@ -27,6 +27,8 @@
 #include "../hotcold/neuron_profiler.h"
 #include "../hotcold/mask_file.h"
 #include "platform/platform_factory.h"
+#include "recommend/catalog_loader.h"
+#include "recommend/recommendation_engine.h"
 
 #include <cstdio>
 #include <string>
@@ -79,6 +81,9 @@ int main(int argc, char* argv[]) {
     std::string platform_override;     // --platform: force specific platform (cuda, hip, metal, cpu)
     int gpu_index            = -1;     // --gpu: select specific GPU by index
     std::string gpu_name_pattern;      // --gpu-name: select GPU by name pattern
+    bool recommend_mode      = false;  // --recommend: show model recommendations
+    std::string use_case     = "all";  // --use-case: filter by use case
+    int top_n                = 8;      // --top: number of recommendations to show
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -209,6 +214,14 @@ int main(int argc, char* argv[]) {
             if (gpu_index < 0) gpu_index = -1;
         } else if (arg == "--gpu-name" && i + 1 < argc) {
             gpu_name_pattern = argv[++i];
+        } else if (arg == "--recommend") {
+            recommend_mode = true;
+        } else if (arg == "--use-case" && i + 1 < argc) {
+            use_case = argv[++i];
+        } else if (arg == "--top" && i + 1 < argc) {
+            top_n = atoi(argv[++i]);
+            if (top_n <= 0) top_n = 8;
+            if (top_n > 20) top_n = 20;
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg[0] != '-' && !model_specified) {
@@ -217,41 +230,102 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (!model_specified) {
-        fprintf(stderr, "Error: --model <url_or_path> is required\n\n");
+    if (!model_specified && !recommend_mode) {
+        fprintf(stderr, "Error: --model <url_or_path> is required (or use --recommend)\n\n");
         print_usage();
         return 1;
     }
 
-    // --- Determine if URL or local path ---
-    bool is_url = (model_url.find("http://") == 0 || model_url.find("https://") == 0);
+    // --- Skip URL resolution in recommend mode ---
+    bool is_url = false;
     std::string model_path;  // local file path (empty if URL)
 
-    if (is_url) {
-        // URL mode: use --model-path for execution, URL for metadata
-        if (!model_local.empty()) {
-            model_path = model_local;
-            { std::ifstream test(model_path);
-              if (!test.is_open()) {
-                fprintf(stderr, "\nError: Model file not found: %s\n", model_path.c_str());
-                return 1;
-              }
+    if (!recommend_mode) {
+        is_url = (model_url.find("http://") == 0 || model_url.find("https://") == 0);
+
+        if (is_url) {
+            // URL mode: use --model-path for execution, URL for metadata
+            if (!model_local.empty()) {
+                model_path = model_local;
+                { std::ifstream test(model_path);
+                  if (!test.is_open()) {
+                    fprintf(stderr, "\nError: Model file not found: %s\n", model_path.c_str());
+                    return 1;
+                  }
+                }
             }
-        }
-        // model_path may be empty — that's fine for advisor mode
-    } else {
-        // Local path mode
-        model_path = resolve_model_path(model_url, model_local);
-        if (model_path.empty()) {
-            fprintf(stderr, "\nError: Model file not found locally.\n");
-            fprintf(stderr, "  Tried: %s\n", model_url.c_str());
-            fprintf(stderr, "\nDownload it first:\n");
-            fprintf(stderr, "  huggingface-cli download <repo> <filename> --local-dir models/\n");
-            return 1;
+            // model_path may be empty — that's fine for advisor mode
+        } else {
+            // Local path mode
+            model_path = resolve_model_path(model_url, model_local);
+            if (model_path.empty()) {
+                fprintf(stderr, "\nError: Model file not found locally.\n");
+                fprintf(stderr, "  Tried: %s\n", model_url.c_str());
+                fprintf(stderr, "\nDownload it first:\n");
+                fprintf(stderr, "  huggingface-cli download <repo> <filename> --local-dir models/\n");
+                return 1;
+            }
         }
     }
 
     printf("\n");
+
+    // =========================================================================
+    // --recommend: Model Recommendation Mode
+    // =========================================================================
+    if (recommend_mode) {
+        // Step 1: Profile hardware
+        std::string model_for_fingerprint;
+        {
+            std::ifstream test;
+            const char* candidates[] = {
+                "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                "../models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                "./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                "C:/dev/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            };
+            for (const char* c : candidates) {
+                test.open(c);
+                if (test.is_open()) { model_for_fingerprint = c; test.close(); break; }
+            }
+        }
+        
+        Timer t_hw;
+        HardwareSpec hw = profile_hardware(model_for_fingerprint);
+        double hw_time = t_hw.elapsed_ms();
+        
+        if (verbose) {
+            print_hardware_full(hw);
+        } else {
+            print_hardware_brief(hw);
+        }
+        
+        // Step 2: Load catalog
+        ModelCatalog catalog = load_builtin_catalog();
+        if (catalog.models.empty()) {
+            fprintf(stderr, "Error: Model catalog is empty.\n");
+            return 1;
+        }
+        
+        // Step 3: Generate recommendations
+        RecommendationRequest req;
+        req.priority = (priority == PriorityMode::SPEED) ? "speed" :
+                       (priority == PriorityMode::QUALITY) ? "quality" : "balanced";
+        req.use_case = use_case;
+        req.top_n = top_n;
+        
+        Timer t_rec;
+        auto recs = generate_recommendations(hw, catalog, req);
+        double rec_time = t_rec.elapsed_ms();
+        
+        // Step 4: Print recommendation table
+        print_recommendation_table(recs, hw, req.priority, req.use_case);
+        
+        printf("\n(Profiling: %.0f ms, Recommendations: %.0f ms)\n",
+               hw_time, rec_time);
+        
+        return 0;
+    }
 
     // =========================================================================
     // --profile-neurons: Neuron Activation Profiling Mode

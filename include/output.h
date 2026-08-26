@@ -5,6 +5,9 @@
 #include <vector>
 #include <string>
 
+// Forward declaration for Step 12 recommendation results
+struct RecommendationResult;
+
 // =============================================================================
 // Output Module — Table Formatting & Printing
 // =============================================================================
@@ -60,6 +63,20 @@ void print_warnings(const HardwareSpec& hw);
 // Print post-table warnings (no viable strategies, CPU-only only)
 void print_post_table_warnings(const std::vector<StrategyResult>& results,
                                const HardwareSpec& hw);
+
+// =============================================================================
+// Recommendation Table (Step 12, Phase C)
+// =============================================================================
+// Prints the model recommendation table with labels, star ratings,
+// download URLs, and copy-pasteable run commands.
+// =============================================================================
+
+void print_recommendation_table(
+    const std::vector<RecommendationResult>& recs,
+    const HardwareSpec& hw,
+    const std::string& priority,
+    const std::string& use_case
+);
 
 // Print usage help
 void print_usage();

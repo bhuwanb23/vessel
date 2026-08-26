@@ -1,6 +1,7 @@
 #include "output.h"
 #include "profiler.h"
 #include "fetcher.h"
+#include "recommend/recommendation_engine.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -611,6 +612,175 @@ std::string resolve_model_path(const std::string& url, const std::string& local_
     return "";
 }
 
+// =============================================================================
+// Recommendation Table (Step 12, Phase C)
+// =============================================================================
+
+void print_recommendation_table(
+    const std::vector<RecommendationResult>& recs,
+    const HardwareSpec& hw,
+    const std::string& priority,
+    const std::string& use_case
+) {
+    // Header
+    printf("\n=== LLM Deployment Planner — Model Recommendations ===\n\n");
+    print_hardware_brief(hw);
+    printf("Priority: %s (use --priority to change)\n", priority.c_str());
+    printf("Use case: %s (use --use-case to filter)\n", use_case.c_str());
+    
+    // Empty result
+    if (recs.empty()) {
+        printf("\n❌ No models found that fit your hardware.\n\n");
+        printf("💡 Your hardware is very constrained. Consider:\n");
+        printf("   • Closing GPU-intensive applications to free VRAM\n");
+        printf("   • Upgrading RAM (16GB+ recommended for local LLMs)\n");
+        printf("   • Using a cloud API for larger models\n");
+        return;
+    }
+    
+    // Determine if this is a "very constrained" scenario
+    bool is_constrained = (hw.vram_free_bytes < 4ULL * 1024 * 1024 * 1024 &&
+                           hw.ram_free_bytes < 8ULL * 1024 * 1024 * 1024);
+    
+    if (is_constrained) {
+        printf("\nVery few models fit on this hardware. Here are your options:\n\n");
+    }
+    
+    // Table header
+    printf(" #  %-25s %-8s %-14s %-8s %-7s %-8s %-9s\n",
+           "Model", "Quant", "Strategy", "VRAM", "tok/s", "Quality", "Download");
+    printf("--- \u2500\u2500\u2500 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 "
+           "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 "
+           "\u2500\u2500\u2500\u2500\u2500\u2500\u2500 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 "
+           "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n");
+    
+    // Table rows
+    for (size_t i = 0; i < recs.size(); i++) {
+        const auto& rec = recs[i];
+        
+        // Model name (truncated to 25 chars)
+        char model_buf[32];
+        snprintf(model_buf, sizeof(model_buf), "%s",
+                 rec.model.name.c_str());
+        if (strlen(model_buf) > 25) model_buf[22] = '.';
+        
+        // VRAM usage
+        char vram_buf[16];
+        if (rec.predicted_vram_gb > 0) {
+            snprintf(vram_buf, sizeof(vram_buf), "%.1f GB", rec.predicted_vram_gb);
+        } else {
+            snprintf(vram_buf, sizeof(vram_buf), "-");
+        }
+        
+        // Speed
+        char speed_buf[16];
+        if (rec.predicted_tok_s > 0) {
+            if (rec.predicted_tok_s >= 100)
+                snprintf(speed_buf, sizeof(speed_buf), "~%.0f", rec.predicted_tok_s);
+            else
+                snprintf(speed_buf, sizeof(speed_buf), "~%.1f", rec.predicted_tok_s);
+        } else {
+            snprintf(speed_buf, sizeof(speed_buf), "-");
+        }
+        
+        // Quality stars
+        const char* stars = quality_to_stars(rec.model.quality_score);
+        
+        // Download size
+        char dl_buf[16];
+        snprintf(dl_buf, sizeof(dl_buf), "%.1f GB", rec.variant.file_size_gb);
+        
+        printf("%2zu  %-25s %-8s %-14s %-8s %-7s %-8s %-9s\n",
+               i + 1,
+               model_buf,
+               rec.variant.quant.c_str(),
+               rec.best_strategy_desc.c_str(),
+               vram_buf,
+               speed_buf,
+               stars,
+               dl_buf);
+    }
+    
+    // =========================================================================
+    // Bottom summary with labels
+    // =========================================================================
+    printf("\n\U0001F4A1 ");
+    
+    // Find key recommendations
+    const RecommendationResult* best_overall = nullptr;
+    const RecommendationResult* fastest = nullptr;
+    const RecommendationResult* best_quality = nullptr;
+    const RecommendationResult* longest_ctx = nullptr;
+    
+    for (const auto& rec : recs) {
+        if (rec.label.find("Best Overall") != std::string::npos)
+            best_overall = &rec;
+        if (rec.label.find("Fastest") != std::string::npos)
+            fastest = &rec;
+        if (rec.label.find("Highest Quality") != std::string::npos)
+            best_quality = &rec;
+        if (rec.label.find("Longest Context") != std::string::npos)
+            longest_ctx = &rec;
+    }
+    
+    // Primary recommendation
+    if (best_overall) {
+        printf("Top pick: #1 %s \u2014 best balance of speed (%.0f tok/s) and quality.\n",
+               best_overall->model.name.c_str(),
+               best_overall->predicted_tok_s);
+    }
+    
+    // Secondary recommendations
+    if (fastest && fastest != best_overall) {
+        // Find its index
+        for (size_t i = 0; i < recs.size(); i++) {
+            if (&recs[i] == fastest) {
+                printf("   For maximum speed: #%zu %s %s at %.0f tok/s.\n",
+                       i + 1, fastest->model.name.c_str(),
+                       fastest->variant.quant.c_str(),
+                       fastest->predicted_tok_s);
+                break;
+            }
+        }
+    }
+    if (best_quality && best_quality != best_overall) {
+        for (size_t i = 0; i < recs.size(); i++) {
+            if (&recs[i] == best_quality) {
+                printf("   For maximum quality: #%zu %s %s (slower but smarter).\n",
+                       i + 1, best_quality->model.name.c_str(),
+                       best_quality->variant.quant.c_str());
+                break;
+            }
+        }
+    }
+    if (longest_ctx) {
+        for (size_t i = 0; i < recs.size(); i++) {
+            if (&recs[i] == longest_ctx) {
+                printf("   For long documents: #%zu %s supports %uK context on your hardware.\n",
+                       i + 1, longest_ctx->model.name.c_str(),
+                       longest_ctx->predicted_max_ctx / 1024);
+                break;
+            }
+        }
+    }
+    
+    // Copy-pasteable run command for the top pick
+    if (!recs.empty()) {
+        const auto& top = recs[0];
+        printf("\nTo download and run the top pick:\n");
+        printf("  llm-planner --model %s --execute\n",
+               top.variant.hf_url.c_str());
+    }
+    
+    // Constrained hardware tips
+    if (is_constrained) {
+        printf("\n\U0001F4A1 Your hardware is very constrained. Consider:\n");
+        printf("   \u2022 Closing GPU-intensive applications to free VRAM\n");
+        printf("   \u2022 Upgrading RAM (16GB+ recommended for local LLMs)\n");
+        printf("   \u2022 Using a cloud API for larger models\n");
+    }
+}
+
 void print_usage() {
     printf("Usage: llm-planner --model <url_or_path> [options]\n\n");
     printf("Required:\n");
@@ -633,6 +803,9 @@ void print_usage() {
     printf("  --profile-neurons                   Run neuron activation profiling\n");
     printf("  --hot-ratio <0.0-1.0>              Target hot neuron ratio (default: 0.15)\n");
     printf("  --vram-budget <GB>                  VRAM budget for hot neurons (default: auto)\n");
+    printf("  --recommend                         Show model recommendations for your hardware\n");
+    printf("  --use-case <chat|coding|...>        Filter recommendations by use case\n");
+    printf("  --top <N>                           Number of recommendations to show (default: 8)\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
     printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
@@ -644,4 +817,7 @@ void print_usage() {
     printf("  llm-planner --model <url> --platform cuda --gpu 0\n");
     printf("  llm-planner --model <url> --platform metal  # Apple Silicon\n");
     printf("  llm-planner --model <url> --execute --gpu-name \"RTX 4090\"\n");
+    printf("  llm-planner --recommend                       # What model should I run?\n");
+    printf("  llm-planner --recommend --use-case coding     # Best model for coding\n");
+    printf("  llm-planner --recommend --priority speed      # Fastest model for my GPU\n");
 }
