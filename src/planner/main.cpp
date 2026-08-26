@@ -84,6 +84,8 @@ int main(int argc, char* argv[]) {
     bool recommend_mode      = false;  // --recommend: show model recommendations
     std::string use_case     = "all";  // --use-case: filter by use case
     int top_n                = 8;      // --top: number of recommendations to show
+    double max_download_gb   = 0.0;    // --max-download: max download size in GB (0 = no limit)
+    std::string catalog_path;           // --catalog: path to custom catalog JSON
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -222,12 +224,26 @@ int main(int argc, char* argv[]) {
             top_n = atoi(argv[++i]);
             if (top_n <= 0) top_n = 8;
             if (top_n > 20) top_n = 20;
+        } else if (arg == "--max-download" && i + 1 < argc) {
+            max_download_gb = atof(argv[++i]);
+            if (max_download_gb <= 0) max_download_gb = 0.0;
+        } else if (arg == "--catalog" && i + 1 < argc) {
+            catalog_path = argv[++i];
         } else if (arg == "--verbose") {
             verbose = true;
         } else if (arg[0] != '-' && !model_specified) {
             model_url = arg;
             model_specified = true;
         }
+    }
+
+    // Mutual exclusivity: --recommend and --model cannot be used together
+    if (recommend_mode && model_specified) {
+        fprintf(stderr, "Error: Cannot use --recommend and --model together.\n");
+        fprintf(stderr, "   --recommend suggests models for your hardware.\n");
+        fprintf(stderr, "   --model predicts strategies for a specific model.\n\n");
+        print_usage();
+        return 1;
     }
 
     if (!model_specified && !recommend_mode) {
@@ -301,7 +317,16 @@ int main(int argc, char* argv[]) {
         }
         
         // Step 2: Load catalog
-        ModelCatalog catalog = load_builtin_catalog();
+        ModelCatalog catalog;
+        if (!catalog_path.empty()) {
+            catalog = load_catalog_from_file(catalog_path);
+            if (catalog.models.empty()) {
+                fprintf(stderr, "Error: Could not load catalog from: %s\n", catalog_path.c_str());
+                return 1;
+            }
+        } else {
+            catalog = load_builtin_catalog();
+        }
         if (catalog.models.empty()) {
             fprintf(stderr, "Error: Model catalog is empty.\n");
             return 1;
@@ -312,6 +337,7 @@ int main(int argc, char* argv[]) {
         req.priority = (priority == PriorityMode::SPEED) ? "speed" :
                        (priority == PriorityMode::QUALITY) ? "quality" : "balanced";
         req.use_case = use_case;
+        req.max_download_gb = max_download_gb;
         req.top_n = top_n;
         
         Timer t_rec;

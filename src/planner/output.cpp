@@ -805,7 +805,9 @@ void print_usage() {
     printf("  --vram-budget <GB>                  VRAM budget for hot neurons (default: auto)\n");
     printf("  --recommend                         Show model recommendations for your hardware\n");
     printf("  --use-case <chat|coding|...>        Filter recommendations by use case\n");
+    printf("  --max-download <GB>                 Max download size in GB (e.g., 5)\n");
     printf("  --top <N>                           Number of recommendations to show (default: 8)\n");
+    printf("  --catalog <path>                    Path to custom catalog JSON file\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
     printf("  llm-planner --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");
@@ -820,4 +822,7 @@ void print_usage() {
     printf("  llm-planner --recommend                       # What model should I run?\n");
     printf("  llm-planner --recommend --use-case coding     # Best model for coding\n");
     printf("  llm-planner --recommend --priority speed      # Fastest model for my GPU\n");
+    printf("  llm-planner --recommend --max-download 5      # Best model under 5GB\n");
+    printf("  llm-planner --recommend --top 3               # Show top 3 only\n");
+    printf("  llm-planner --recommend --catalog my.json     # Use custom catalog\n");
 }
