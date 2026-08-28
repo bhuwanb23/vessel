@@ -435,4 +435,6 @@ endif() # LLAMA_AVAILABLE for recommend_test
 # ============================================
 # Installation
 # ============================================
-install(TARGETS vessel e2e_test predictor_test DESTINATION bin)
+if(LLAMA_AVAILABLE)
+    install(TARGETS vessel e2e_test predictor_test DESTINATION bin)
+endif()
