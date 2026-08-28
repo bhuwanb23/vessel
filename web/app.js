@@ -1,242 +1,382 @@
-// Vessel Dashboard - Phase C: Full API with envelope, SSE, all endpoints
+// Vessel Dashboard - Phase D: Full SPA
 const API = '';
+
+// =========================================================================
+// State
+// =========================================================================
+const state = {
+    hardware: null,
+    currentView: 'home',
+    predictStrategies: [],
+    hwSSE: null,
+};
+
+// =========================================================================
+// API Client
+// =========================================================================
+const api = {
+    async get(url) {
+        const r = await fetch(API + url);
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error?.message || 'Request failed');
+        return j.data;
+    },
+    async post(url, body) {
+        const r = await fetch(API + url, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error?.message || 'Request failed');
+        return j.data;
+    },
+    async del(url) {
+        const r = await fetch(API + url, { method: 'DELETE' });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error?.message || 'Request failed');
+        return j.data;
+    },
+    async getHardware() { return this.get('/api/hardware'); },
+    async predict(url, priority) { return this.post('/api/predict', { model_url: url, priority }); },
+    async recommend(priority, useCase) { return this.get(`/api/recommend?priority=${priority}&use_case=${useCase}&top=8`); },
+    async getCatalog() { return this.get('/api/catalog'); },
+    async getLocalModels() { return this.get('/api/models/local'); },
+    async getCalibration() { return this.get('/api/calibration'); },
+    async getCalHistory() { return this.get('/api/calibration/history'); },
+    async startDownload(url) { return this.post('/api/download', { model_url: url }); },
+    async startExecute(path, strategy, prompt, maxTokens) {
+        return this.post('/api/execute', { model_path: path, strategy, prompt, max_tokens: maxTokens });
+    },
+    async abortExecute(id) { return this.post(`/api/execute/${id}/abort`, {}); },
+    async resetCalibration() { return this.del('/api/calibration'); },
+};
+
+// =========================================================================
+// SSE Client
+// =========================================================================
+function subscribeSSE(url, handlers) {
+    const source = new EventSource(API + url);
+    for (const [event, handler] of Object.entries(handlers)) {
+        source.addEventListener(event, e => handler(JSON.parse(e.data)));
+    }
+    source.onerror = () => {};
+    return source;
+}
 
 // =========================================================================
 // Helpers
 // =========================================================================
+function fmt(b) {
+    if (b >= 1e12) return (b/1e12).toFixed(1)+' TB';
+    if (b >= 1e9) return (b/1e9).toFixed(1)+' GB';
+    if (b >= 1e6) return (b/1e6).toFixed(0)+' MB';
+    return b+' B';
+}
+
 function stars(n) {
-    const full = Math.round(n / 2);
-    return '★'.repeat(Math.min(full, 5)) + '☆'.repeat(5 - Math.min(full, 5));
+    const f = Math.round(n/2);
+    return '★'.repeat(Math.min(f,5))+'☆'.repeat(5-Math.min(f,5));
 }
 
-function formatBytes(b) {
-    if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB';
-    if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB';
-    if (b >= 1e6) return (b / 1e6).toFixed(0) + ' MB';
-    return b + ' B';
+function barHTML(pct, cls, label) {
+    return `<div class="bar-bg"><div class="bar-fill ${cls}" style="width:${Math.min(pct,100)}%"></div><span class="bar-text">${label}</span></div>`;
 }
 
-function setStatus(id, text, type) {
+function setStatus(id, text, cls) {
     const el = document.getElementById(id);
-    if (el) { el.textContent = text; el.className = 'status ' + (type || ''); }
+    if (el) { el.textContent = text; el.className = 'status '+(cls||''); }
 }
 
 // =========================================================================
-// Hardware (with SSE for live updates)
+// Navigation
 // =========================================================================
-let hwEventSource = null;
+function navigate(viewName) {
+    state.currentView = viewName;
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    const view = document.getElementById('view-'+viewName);
+    if (view) view.classList.add('active');
+    const tab = document.querySelector(`.tab[data-view="${viewName}"]`);
+    if (tab) tab.classList.add('active');
 
-function startHardwareStream() {
-    if (hwEventSource) hwEventSource.close();
-    hwEventSource = new EventSource(`${API}/api/hardware/live`);
-    hwEventSource.addEventListener('hardware', (e) => {
-        const hw = JSON.parse(e.data);
-        updateGauges(hw);
-    });
-    hwEventSource.onerror = () => {
-        // Fall back to polling
-        setTimeout(loadHardware, 2000);
-    };
+    // Load data for the view
+    switch(viewName) {
+        case 'home': loadHardware(); break;
+        case 'recommend': loadRecommendations(); break;
+        case 'models': loadLocalModels(); break;
+        case 'calibration': loadCalibration(); break;
+    }
 }
 
-function updateGauges(hw) {
-    const vramTotal = hw.vram_free_bytes + (hw.vram_used_bytes || 0);
-    const vramUsed = hw.vram_used_bytes || 0;
-    const vramPct = vramTotal > 0 ? (vramUsed / vramTotal * 100) : 0;
+// Tab clicks
+document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => navigate(t.dataset.view));
+});
 
-    const vramBar = document.getElementById('vram-bar');
-    if (vramBar) {
-        vramBar.style.width = vramPct + '%';
-        vramBar.className = 'gauge-fill' + (vramPct > 90 ? ' danger' : vramPct > 70 ? ' warn' : '');
-    }
-    const vramText = document.getElementById('vram-text');
-    if (vramText) vramText.textContent = formatBytes(vramUsed) + ' / ' + formatBytes(vramTotal);
+// =========================================================================
+// View: Home
+// =========================================================================
+function updateHomeGauges(hw) {
+    const gpuName = hw.gpu_name || 'CPU Only';
+    document.getElementById('hw-gpu-name').textContent = gpuName;
+    document.getElementById('hw-summary').textContent =
+        `${fmt(hw.vram_total_bytes)} VRAM | ${fmt(hw.ram_total_bytes)} RAM | ${hw.platform || 'Unknown'}`;
+    document.getElementById('platform-badge').textContent = hw.platform || 'CPU';
 
-    const tempText = document.getElementById('temp-text');
-    if (tempText) tempText.textContent = hw.gpu_temp_celsius > 0 ? hw.gpu_temp_celsius + '°C' : 'N/A';
+    const vramUsed = hw.vram_total_bytes - hw.vram_free_bytes;
+    const vramPct = hw.vram_total_bytes > 0 ? (vramUsed / hw.vram_total_bytes * 100) : 0;
+    document.getElementById('vram-bar').style.width = vramPct+'%';
+    document.getElementById('vram-bar').className = 'gauge-fill'+(vramPct>90?' danger':vramPct>70?' warn':'');
+    document.getElementById('vram-text').textContent = fmt(vramUsed)+' / '+fmt(hw.vram_total_bytes);
 
-    const bwText = document.getElementById('bw-text');
-    if (bwText) bwText.textContent = (hw.gpu_bandwidth_gbs || 0) > 0 ? hw.gpu_bandwidth_gbs.toFixed(0) + ' GB/s' : 'N/A';
+    const ramUsed = hw.ram_total_bytes - hw.ram_free_bytes;
+    const ramPct = hw.ram_total_bytes > 0 ? (ramUsed / hw.ram_total_bytes * 100) : 0;
+    document.getElementById('ram-bar').style.width = ramPct+'%';
+    document.getElementById('ram-bar').className = 'gauge-fill'+(ramPct>90?' danger':ramPct>70?' warn':'');
+    document.getElementById('ram-text').textContent = fmt(ramUsed)+' / '+fmt(hw.ram_total_bytes);
 
-    // RAM
-    const ramTotal = hw.ram_free_bytes + (hw.ram_used_bytes || 0);
-    const ramUsed = hw.ram_used_bytes || 0;
-    const ramPct = ramTotal > 0 ? (ramUsed / ramTotal * 100) : 0;
-    const ramBar = document.getElementById('ram-bar');
-    if (ramBar) {
-        ramBar.style.width = ramPct + '%';
-        ramBar.className = 'gauge-fill' + (ramPct > 90 ? ' danger' : ramPct > 70 ? ' warn' : '');
-    }
-    const ramText = document.getElementById('ram-text');
-    if (ramText) ramText.textContent = formatBytes(ramUsed) + ' / ' + formatBytes(ramTotal);
+    document.getElementById('temp-text').textContent = hw.gpu_temp_celsius > 0 ? hw.gpu_temp_celsius+'°C' : 'N/A';
+    document.getElementById('bw-text').textContent = hw.gpu_bandwidth_gbs > 0 ? hw.gpu_bandwidth_gbs.toFixed(0)+' GB/s' : 'N/A';
 }
 
 async function loadHardware() {
     try {
-        const res = await fetch(`${API}/api/hardware`);
-        const json = await res.json();
-        if (json.success) {
-            updateGauges(json.data);
-            document.getElementById('platform-badge').textContent = json.data.gpu_name || 'CPU';
+        state.hardware = await api.getHardware();
+        updateHomeGauges(state.hardware);
+    } catch(e) { console.error(e); }
+}
+
+function startHWSSE() {
+    if (state.hwSSE) state.hwSSE.close();
+    state.hwSSE = subscribeSSE('/api/hardware/live', {
+        hardware: (hw) => {
+            // Only update home view gauges if on home
+            if (state.currentView === 'home') {
+                // Merge with existing state
+                if (state.hardware) {
+                    state.hardware.vram_free_bytes = hw.vram_free_bytes;
+                    state.hardware.ram_free_bytes = hw.ram_free_bytes;
+                    state.hardware.gpu_temp_celsius = hw.gpu_temp_celsius;
+                    updateHomeGauges(state.hardware);
+                }
+            }
         }
-    } catch (e) { console.error('Hardware fetch failed:', e); }
+    });
 }
 
 // =========================================================================
-// Model Analysis (POST /api/predict)
+// View: Predict
 // =========================================================================
-let currentStrategies = [];
-
-async function analyzeModel() {
-    const url = document.getElementById('model-url').value.trim();
+async function runPredict() {
+    const url = document.getElementById('predict-url').value.trim();
     if (!url) return;
+    const priority = document.querySelector('input[name="priority"]:checked').value;
 
-    setStatus('analyze-status', 'Fetching metadata...', 'loading');
-    document.getElementById('btn-analyze').disabled = true;
+    setStatus('predict-status', 'Fetching metadata and predicting...', 'loading');
+    document.getElementById('btn-predict').disabled = true;
 
     try {
-        const res = await fetch(`${API}/api/predict`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_url: url, priority: 'speed' })
-        });
-        const json = await res.json();
+        const data = await api.predict(url, priority);
+        state.predictStrategies = data.strategies || [];
 
-        if (!json.success) {
-            throw new Error(json.error?.message || 'Request failed');
-        }
+        // Model info
+        const mi = document.getElementById('predict-model-info');
+        mi.classList.remove('hidden');
+        mi.innerHTML = `<div class="model-info"><strong>${data.model.name}</strong> | ${data.model.params} params | ${data.model.layers} layers | ${data.model.architecture} | ${data.model.is_moe ? 'MoE' : 'Dense'} | <em>Generated in ${data.time_ms}ms</em></div>`;
 
-        const data = json.data;
-        currentStrategies = data.strategies || [];
-
-        document.getElementById('model-info').innerHTML =
-            `<strong>${data.model.name}</strong> | ` +
-            `${data.model.params} params | ${data.model.layers} layers | ` +
-            `${data.model.architecture} | ${data.model.is_moe ? 'MoE' : 'Dense'}`;
-
-        renderStrategies(data.strategies);
-        document.getElementById('strategy-panel').classList.remove('hidden');
-        setStatus('analyze-status', `Found ${data.strategies.length} strategies in ${data.time_ms}ms`);
-    } catch (e) {
-        setStatus('analyze-status', `Error: ${e.message}`, 'error');
+        // Strategy table
+        renderPredictTable(data.strategies);
+        document.getElementById('predict-results').classList.remove('hidden');
+        setStatus('predict-status', `${data.strategies.length} strategies found`);
+    } catch(e) {
+        setStatus('predict-status', 'Error: '+e.message, 'error');
     } finally {
-        document.getElementById('btn-analyze').disabled = false;
+        document.getElementById('btn-predict').disabled = false;
     }
 }
 
-function renderStrategies(strategies) {
-    const tbody = document.getElementById('strategy-body');
+function renderPredictTable(strategies) {
+    const tbody = document.getElementById('predict-body');
     tbody.innerHTML = '';
-    const names = { 'FULL_GPU':'Full GPU', 'GPU_CPU_SPLIT':'Split', 'CPU_ONLY':'CPU', 'HOT_COLD_SPLIT':'Hot/Cold', 'LAYER_STREAM':'Stream' };
+    const names = {'FULL_GPU':'Full GPU','GPU_CPU_SPLIT':'Split','CPU_ONLY':'CPU Only','HOT_COLD_SPLIT':'Hot/Cold','LAYER_STREAM':'Stream'};
+    const maxTPS = Math.max(...strategies.map(s => s.tokens_per_sec || 0), 1);
+    const maxVRAM = Math.max(...strategies.map(s => s.vram_bytes || 0), 1);
 
     strategies.forEach((s, i) => {
-        const statusClass = s.status === 'VIABLE' ? 'status-viable' : s.status === 'NO_FIT' ? 'status-no-fit' : s.status === 'TIGHT' ? 'status-tight' : 'status-stream';
+        const cls = s.status==='VIABLE'?'status-viable':s.status==='NO_FIT'?'status-no-fit':s.status==='TIGHT'?'status-tight':'status-viable';
+        const tpsPct = (s.tokens_per_sec||0)/maxTPS*100;
+        const vramPct = (s.vram_bytes||0)/maxVRAM*100;
+        const tpsClass = s.placement==='FULL_GPU'?'gpu':s.placement==='GPU_CPU_SPLIT'?'split':'cpu';
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td>${i + 1}</td>
-            <td>${names[s.placement] || s.placement}</td>
-            <td>${s.gpu_layers}</td>
-            <td>${s.context_length >= 1024 ? (s.context_length/1024)+'K' : s.context_length}</td>
-            <td>${s.kv_quant_bits === 16 ? 'FP16' : 'Q8'}</td>
-            <td>${s.vram_bytes > 0 ? formatBytes(s.vram_bytes) : '--'}</td>
-            <td>${s.ram_bytes > 0 ? formatBytes(s.ram_bytes) : '--'}</td>
-            <td>${s.tokens_per_sec > 0 ? '~'+s.tokens_per_sec.toFixed(1) : '--'}</td>
-            <td>${s.ttft_ms > 0 ? '~'+s.ttft_ms.toFixed(0)+'ms' : '--'}</td>
-            <td class="${statusClass}">${s.status}</td>
-            <td>${s.viable ? `<button class="btn-sm" onclick="selectStrategy(${i})">Use</button>` : ''}</td>
+            <td>${i+1}</td>
+            <td><strong>${names[s.placement]||s.placement}</strong></td>
+            <td class="bar-cell">${s.tokens_per_sec>0?barHTML(tpsPct,tpsClass,'~'+s.tokens_per_sec.toFixed(0)):barHTML(0,'cpu','--')}</td>
+            <td class="bar-cell">${s.vram_bytes>0?barHTML(vramPct,'gpu',fmt(s.vram_bytes)):barHTML(0,'cpu','--')}</td>
+            <td>${s.context_length>=1024?(s.context_length/1024)+'K':s.context_length}</td>
+            <td>${s.kv_quant_bits===16?'FP16':'Q8'}</td>
+            <td>${s.ttft_ms>0&&s.ttft_ms<60000?'~'+s.ttft_ms.toFixed(0)+'ms':'--'}</td>
+            <td class="${cls}">${s.status}</td>
+            <td>${s.viable?`<button class="btn-sm btn-primary" onclick="selectStrategy(${i})">Use</button>`:''}</td>
         `;
         tbody.appendChild(row);
     });
 }
 
 function selectStrategy(i) {
-    const s = currentStrategies[i];
-    document.getElementById('exec-panel').classList.remove('hidden');
-    document.getElementById('exec-log').textContent =
-        `Strategy #${i+1}: ${s.placement}, ${s.gpu_layers} layers, ${s.context_length/1024}K context\n` +
-        `Run in CLI: vessel --model <url> --execute\n`;
+    const s = state.predictStrategies[i];
+    openExecModal({
+        strategy: s,
+        placement: s.placement,
+        gpu_layers: s.gpu_layers,
+        context: s.context_length,
+        kv: s.kv_quant_bits
+    });
 }
 
 // =========================================================================
-// Recommendations (GET /api/recommend)
+// View: Recommend
 // =========================================================================
 async function loadRecommendations() {
     const priority = document.getElementById('rec-priority').value;
     const useCase = document.getElementById('rec-usecase').value;
+    const container = document.getElementById('rec-cards');
+    container.innerHTML = '<div class="dim">Loading recommendations...</div>';
 
     try {
-        const res = await fetch(`${API}/api/recommend?priority=${priority}&use_case=${useCase}&top=8`);
-        const json = await res.json();
-        if (!json.success) return;
-
-        const tbody = document.getElementById('rec-body');
-        tbody.innerHTML = '';
-        (json.data.recommendations || []).forEach((r, i) => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${i + 1}</td>
-                <td>${r.label || ''}</td>
-                <td>${r.model}</td>
-                <td>${r.quant}</td>
-                <td>${r.strategy}</td>
-                <td>${r.vram_bytes > 0 ? formatBytes(r.vram_bytes) : '--'}</td>
-                <td>${r.tokens_per_sec > 0 ? '~'+r.tokens_per_sec.toFixed(1) : '--'}</td>
-                <td class="stars">${r.quality_stars}</td>
-                <td>${r.download_gb > 0 ? r.download_gb.toFixed(1)+' GB' : '--'}</td>
-                <td>${r.hf_url ? `<button class="btn-sm" onclick="document.getElementById('model-url').value='${r.hf_url}';analyzeModel()">Use</button>` : ''}</td>
+        const data = await api.recommend(priority, useCase);
+        container.innerHTML = '';
+        (data.recommendations||[]).forEach((r, i) => {
+            const card = document.createElement('div');
+            card.className = 'rec-card';
+            card.innerHTML = `
+                ${r.label?`<span class="label-badge">${r.label}</span>`:''}
+                <h3>${r.model}</h3>
+                <div class="meta">${r.quant} | ${r.download_gb.toFixed(1)} GB download | <span class="stars">${r.quality_stars}</span></div>
+                <div class="perf">
+                    <span>Strategy: <strong>${r.strategy}</strong></span>
+                    <span>~${r.tokens_per_sec.toFixed(0)} tok/s</span>
+                    <span>${r.vram_bytes>0?fmt(r.vram_bytes)+' VRAM':'CPU'}</span>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('predict-url').value='${r.hf_url}';navigate('predict')">Use This →</button>
             `;
-            tbody.appendChild(row);
+            container.appendChild(card);
         });
-    } catch (e) { console.error('Recommendations failed:', e); }
+    } catch(e) {
+        container.innerHTML = `<div class="dim">Error: ${e.message}</div>`;
+    }
 }
 
 // =========================================================================
-// Local Models (GET /api/models/local)
+// View: Models
 // =========================================================================
 async function loadLocalModels() {
     try {
-        const res = await fetch(`${API}/api/models/local`);
-        const json = await res.json();
-        if (json.success && json.data.models.length > 0) {
-            const el = document.getElementById('local-models');
-            if (el) el.innerHTML = `<strong>${json.data.count}</strong> local models found`;
-        }
-    } catch (e) { console.error('Local models fetch failed:', e); }
+        const data = await api.getLocalModels();
+        document.getElementById('models-summary').textContent = `${data.count} local model(s) found`;
+        const list = document.getElementById('models-list');
+        list.innerHTML = '';
+        (data.models||[]).forEach(m => {
+            const item = document.createElement('div');
+            item.className = 'model-item';
+            item.innerHTML = `
+                <div>
+                    <div class="model-name">${m.filename}</div>
+                    <div class="model-meta">${fmt(m.size_bytes)} | ${m.path}</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('predict-url').value='${m.path}';navigate('predict')">Analyze</button>
+            `;
+            list.appendChild(item);
+        });
+    } catch(e) {
+        document.getElementById('models-summary').textContent = 'Error: '+e.message;
+    }
 }
 
 // =========================================================================
-// Calibration (GET /api/calibration)
+// View: Calibration
 // =========================================================================
 async function loadCalibration() {
     try {
-        const res = await fetch(`${API}/api/calibration`);
-        const json = await res.json();
-        const info = document.getElementById('cal-info');
-        if (!json.success || !info) return;
-        const d = json.data;
-        if (d.records === 0) {
-            info.textContent = 'No calibration data yet. Run a model execution to generate data.';
+        const data = await api.getCalibration();
+        const summary = document.getElementById('cal-summary');
+        if (data.records === 0) {
+            summary.innerHTML = 'No calibration data yet. Run a model execution to generate data.';
         } else {
-            info.innerHTML = `<strong>${d.matching_records}</strong> records for this hardware | ` +
-                `GPU overhead: ${d.gpu_overhead_mb || 512} MB | ` +
-                `GPU eff: ${(d.gpu_decode_efficiency || 0.27).toFixed(3)}`;
+            summary.innerHTML = `<strong>${data.matching_records}</strong> records for this hardware | Fingerprint: <code>${data.fingerprint}</code>`;
         }
-    } catch (e) { console.error('Calibration fetch failed:', e); }
+
+        const hist = await api.getCalHistory();
+        const tbody = document.getElementById('cal-body');
+        tbody.innerHTML = '';
+        if (hist.entries && hist.entries.length > 0) {
+            document.getElementById('cal-table').classList.remove('hidden');
+            hist.entries.slice(-20).reverse().forEach(e => {
+                const delta = e.actual_tps > 0 ? ((e.predicted_tps - e.actual_tps) / e.actual_tps * 100).toFixed(1) : '--';
+                const deltaClass = Math.abs(parseFloat(delta)) < 15 ? 'status-viable' : Math.abs(parseFloat(delta)) < 30 ? 'status-tight' : 'status-no-fit';
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${e.model_id||'--'}</td>
+                    <td>${e.placement||'--'}</td>
+                    <td>${e.predicted_tps>0?'~'+e.predicted_tps.toFixed(1):'--'}</td>
+                    <td>${e.actual_tps>0?e.actual_tps.toFixed(1):'--'}</td>
+                    <td class="${deltaClass}">${delta!=='--'?delta+'%':'--'}</td>
+                    <td>${e.timestamp||'--'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+    } catch(e) { console.error(e); }
+}
+
+async function resetCalibration() {
+    if (!confirm('Reset all calibration data? This cannot be undone.')) return;
+    try {
+        await api.resetCalibration();
+        loadCalibration();
+    } catch(e) { alert('Error: '+e.message); }
 }
 
 // =========================================================================
-// Health Check
+// Execution Modal
 // =========================================================================
-async function checkHealth() {
-    try {
-        const res = await fetch(`${API}/api/health`);
-        const json = await res.json();
-        const el = document.getElementById('footer-status');
-        if (el) el.textContent = json.success ? 'Connected' : 'Error';
-    } catch (e) {
-        const el = document.getElementById('footer-status');
-        if (el) el.textContent = 'Disconnected';
-    }
+let execSSE = null;
+
+function openExecModal(config) {
+    document.getElementById('exec-modal').classList.remove('hidden');
+    document.getElementById('exec-output').textContent = '';
+    document.getElementById('exec-tps').textContent = '--';
+    document.getElementById('exec-vram').textContent = '--';
+    document.getElementById('exec-temp').textContent = '--';
+    document.getElementById('exec-tokens').textContent = '0/0';
+    document.getElementById('exec-progress').style.width = '0%';
+    document.getElementById('btn-abort').classList.remove('hidden');
+    document.getElementById('btn-close-exec').classList.add('hidden');
+
+    // For now, show that execution requires CLI
+    document.getElementById('exec-output').textContent =
+        'Execution via the dashboard will be available in a future update.\n\n' +
+        'For now, use the CLI:\n' +
+        '  vessel --model <url> --execute\n\n' +
+        `Strategy: ${config.placement}\n` +
+        `GPU Layers: ${config.gpu_layers}\n` +
+        `Context: ${config.context}\n` +
+        `KV Cache: ${config.kv === 16 ? 'FP16' : 'Q8'}\n`;
+
+    // Close immediately since we can't execute yet
+    setTimeout(() => {
+        document.getElementById('btn-abort').classList.add('hidden');
+        document.getElementById('btn-close-exec').classList.remove('hidden');
+    }, 500);
+}
+
+function closeExecModal() {
+    document.getElementById('exec-modal').classList.add('hidden');
+    if (execSSE) { execSSE.close(); execSSE = null; }
+}
+
+async function abortExecution() {
+    closeExecModal();
 }
 
 // =========================================================================
@@ -244,8 +384,5 @@ async function checkHealth() {
 // =========================================================================
 document.addEventListener('DOMContentLoaded', () => {
     loadHardware();
-    loadRecommendations();
-    loadCalibration();
-    checkHealth();
-    startHardwareStream();
+    startHWSSE();
 });

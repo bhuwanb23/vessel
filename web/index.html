@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <!-- Header -->
     <header>
         <div class="header-left">
             <h1>Vessel</h1>
@@ -17,117 +18,175 @@
         </div>
     </header>
 
+    <!-- Tab Navigation -->
+    <nav id="tabs">
+        <button class="tab active" data-view="home">Home</button>
+        <button class="tab" data-view="predict">Predict</button>
+        <button class="tab" data-view="recommend">Recommend</button>
+        <button class="tab" data-view="models">Models</button>
+        <button class="tab" data-view="calibration">Calibration</button>
+    </nav>
+
+    <!-- Views -->
     <main>
-        <!-- Hardware Panel -->
-        <section id="hardware-panel" class="panel">
-            <h2>Hardware</h2>
-            <div class="gauges">
-                <div class="gauge">
-                    <label>GPU</label>
-                    <div class="gauge-bar"><div id="vram-bar" class="gauge-fill" style="width:0%"></div></div>
-                    <span id="vram-text">--</span>
+        <!-- HOME VIEW -->
+        <section id="view-home" class="view active">
+            <div class="card hardware-card">
+                <div class="card-header">
+                    <span class="gpu-icon">🖥️</span>
+                    <div>
+                        <h2 id="hw-gpu-name">Detecting GPU...</h2>
+                        <p id="hw-summary" class="dim">Profiling hardware...</p>
+                    </div>
                 </div>
-                <div class="gauge">
-                    <label>RAM</label>
-                    <div class="gauge-bar"><div id="ram-bar" class="gauge-fill" style="width:0%"></div></div>
-                    <span id="ram-text">--</span>
+                <div class="gauges-grid">
+                    <div class="gauge-item">
+                        <label>VRAM</label>
+                        <div class="gauge-bar"><div id="vram-bar" class="gauge-fill"></div></div>
+                        <span id="vram-text" class="gauge-label">--</span>
+                    </div>
+                    <div class="gauge-item">
+                        <label>RAM</label>
+                        <div class="gauge-bar"><div id="ram-bar" class="gauge-fill"></div></div>
+                        <span id="ram-text" class="gauge-label">--</span>
+                    </div>
+                    <div class="gauge-item">
+                        <label>Temp</label>
+                        <span id="temp-text" class="gauge-big">--</span>
+                    </div>
+                    <div class="gauge-item">
+                        <label>Bandwidth</label>
+                        <span id="bw-text" class="gauge-big">--</span>
+                    </div>
                 </div>
-                <div class="gauge">
-                    <label>Temp</label>
-                    <span id="temp-text" class="metric">--</span>
-                </div>
-                <div class="gauge">
-                    <label>GPU BW</label>
-                    <span id="bw-text" class="metric">--</span>
+                <div class="action-row">
+                    <button class="btn btn-primary" onclick="navigate('predict')">🔍 Predict a Model</button>
+                    <button class="btn btn-secondary" onclick="navigate('recommend')">💡 Get Recommendations</button>
+                    <button class="btn btn-secondary" onclick="navigate('models')">📦 My Models</button>
                 </div>
             </div>
         </section>
 
-        <!-- Model Input -->
-        <section id="model-input-panel" class="panel">
-            <h2>Analyze Model</h2>
-            <div class="input-row">
-                <input type="text" id="model-url" placeholder="Paste HuggingFace GGUF URL or local path...">
-                <button id="btn-analyze" onclick="analyzeModel()">Analyze</button>
+        <!-- PREDICT VIEW -->
+        <section id="view-predict" class="view">
+            <div class="card">
+                <h2>Predict Strategy</h2>
+                <div class="input-row">
+                    <input type="text" id="predict-url" placeholder="Paste HuggingFace GGUF URL or local path...">
+                    <button id="btn-predict" class="btn btn-primary" onclick="runPredict()">Predict</button>
+                </div>
+                <div class="priority-row">
+                    <label>Priority:</label>
+                    <label class="radio"><input type="radio" name="priority" value="speed" checked> Speed</label>
+                    <label class="radio"><input type="radio" name="priority" value="quality"> Quality</label>
+                    <label class="radio"><input type="radio" name="priority" value="safety"> Safety</label>
+                </div>
+                <div id="predict-status" class="status"></div>
             </div>
-            <div id="analyze-status" class="status"></div>
-        </section>
-
-        <!-- Strategy Table -->
-        <section id="strategy-panel" class="panel hidden">
-            <h2>Strategies</h2>
-            <div id="model-info" class="model-info"></div>
-            <table id="strategy-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Placement</th>
-                        <th>GPU Layers</th>
-                        <th>Context</th>
-                        <th>KV</th>
-                        <th>VRAM</th>
-                        <th>RAM</th>
-                        <th>tok/s</th>
-                        <th>TTFT</th>
-                        <th>Status</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="strategy-body"></tbody>
-            </table>
-        </section>
-
-        <!-- Recommendations -->
-        <section id="recommend-panel" class="panel">
-            <h2>Recommendations</h2>
-            <div class="controls">
-                <select id="rec-priority" onchange="loadRecommendations()">
-                    <option value="balanced">Balanced</option>
-                    <option value="speed">Speed</option>
-                    <option value="quality">Quality</option>
-                </select>
-                <select id="rec-usecase" onchange="loadRecommendations()">
-                    <option value="all">All</option>
-                    <option value="chat">Chat</option>
-                    <option value="coding">Coding</option>
-                    <option value="reasoning">Reasoning</option>
-                </select>
-                <button onclick="loadRecommendations()">Refresh</button>
+            <div id="predict-model-info" class="card hidden"></div>
+            <div id="predict-results" class="card hidden">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Placement</th>
+                            <th>tok/s</th>
+                            <th>VRAM</th>
+                            <th>Context</th>
+                            <th>KV</th>
+                            <th>TTFT</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="predict-body"></tbody>
+                </table>
             </div>
-            <table id="rec-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Label</th>
-                        <th>Model</th>
-                        <th>Quant</th>
-                        <th>Strategy</th>
-                        <th>VRAM</th>
-                        <th>tok/s</th>
-                        <th>Quality</th>
-                        <th>Size</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="rec-body"></tbody>
-            </table>
-            <div id="rec-summary" class="summary"></div>
         </section>
 
-        <!-- Calibration -->
-        <section id="calibration-panel" class="panel">
-            <h2>Calibration History</h2>
-            <div id="cal-info" class="cal-info"></div>
-            <button onclick="loadCalibration()">Refresh</button>
+        <!-- RECOMMEND VIEW -->
+        <section id="view-recommend" class="view">
+            <div class="card">
+                <h2>Model Recommendations</h2>
+                <div class="controls-row">
+                    <select id="rec-priority" onchange="loadRecommendations()">
+                        <option value="balanced">Balanced</option>
+                        <option value="speed">Speed</option>
+                        <option value="quality">Quality</option>
+                    </select>
+                    <select id="rec-usecase" onchange="loadRecommendations()">
+                        <option value="all">All Use Cases</option>
+                        <option value="chat">Chat</option>
+                        <option value="coding">Coding</option>
+                        <option value="reasoning">Reasoning</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="loadRecommendations()">Refresh</button>
+                </div>
+            </div>
+            <div id="rec-cards" class="cards-grid"></div>
         </section>
 
-        <!-- Execution Log -->
-        <section id="exec-panel" class="panel hidden">
-            <h2>Execution</h2>
-            <div id="exec-log" class="log"></div>
+        <!-- MODELS VIEW -->
+        <section id="view-models" class="view">
+            <div class="card">
+                <h2>Local Models</h2>
+                <div id="models-summary" class="dim">Scanning...</div>
+            </div>
+            <div id="models-list" class="card"></div>
+        </section>
+
+        <!-- CALIBRATION VIEW -->
+        <section id="view-calibration" class="view">
+            <div class="card">
+                <h2>Calibration History</h2>
+                <div id="cal-summary" class="dim">Loading...</div>
+                <div class="controls-row">
+                    <button class="btn btn-danger" onclick="resetCalibration()">Reset Calibration</button>
+                </div>
+            </div>
+            <div id="cal-table" class="card hidden">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Strategy</th>
+                            <th>Predicted</th>
+                            <th>Actual</th>
+                            <th>Delta</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cal-body"></tbody>
+                </table>
+            </div>
         </section>
     </main>
 
+    <!-- Execution Modal -->
+    <div id="exec-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Execution</h2>
+                <button class="btn-close" onclick="closeExecModal()">&times;</button>
+            </div>
+            <div class="exec-stats">
+                <div class="stat"><label>tok/s</label><span id="exec-tps">--</span></div>
+                <div class="stat"><label>VRAM</label><span id="exec-vram">--</span></div>
+                <div class="stat"><label>Temp</label><span id="exec-temp">--</span></div>
+                <div class="stat"><label>Tokens</label><span id="exec-tokens">0/0</span></div>
+            </div>
+            <div class="exec-gauge">
+                <div class="gauge-bar"><div id="exec-progress" class="gauge-fill"></div></div>
+            </div>
+            <div id="exec-output" class="exec-output"></div>
+            <div class="exec-actions">
+                <button id="btn-abort" class="btn btn-danger" onclick="abortExecution()">Abort</button>
+                <button id="btn-close-exec" class="btn hidden" onclick="closeExecModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
     <footer>
         <span>Vessel v0.1.0</span>
         <span id="footer-status">Ready</span>
