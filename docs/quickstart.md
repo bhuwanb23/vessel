@@ -4,26 +4,26 @@ Get Vessel running in 3 commands.
 
 ## 1. Install
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/youruser/vessel/releases).
+Download the latest release for your platform from [GitHub Releases](https://github.com/bhuwanb23/vessel/releases).
 
 **Windows (NVIDIA):**
 ```bash
 # Download
-curl -L -o vessel.exe https://github.com/youruser/vessel/releases/latest/download/vessel-windows-cuda.exe
+curl -L -o vessel.exe https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-windows-cuda.exe
 
 # Or with PowerShell
-Invoke-WebRequest -Uri "https://github.com/youruser/vessel/releases/latest/download/vessel-windows-cuda.exe" -OutFile "vessel.exe"
+Invoke-WebRequest -Uri "https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-windows-cuda.exe" -OutFile "vessel.exe"
 ```
 
 **Linux (NVIDIA):**
 ```bash
-curl -L -o vessel https://github.com/youruser/vessel/releases/latest/download/vessel-linux-cuda
+curl -L -o vessel https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-linux-cuda
 chmod +x vessel
 ```
 
 **macOS (Apple Silicon):**
 ```bash
-curl -L -o vessel https://github.com/youruser/vessel/releases/latest/download/vessel-macos-metal
+curl -L -o vessel https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-macos-metal
 chmod +x vessel
 ```
 

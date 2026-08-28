@@ -14,7 +14,7 @@ Thank you for your interest in contributing to Vessel! This document provides gu
 ### Building
 
 ```bash
-git clone https://github.com/youruser/vessel.git
+git clone https://github.com/bhuwanb23/vessel.git
 cd vessel
 cmake -B build -DGGML_CUDA=ON
 cmake --build build --config Debug

@@ -44,18 +44,18 @@ Priority: balanced (use --priority to change)
 **Windows (NVIDIA):**
 ```bash
 # Download the latest release
-curl -L -o vessel.exe https://github.com/youruser/vessel/releases/latest/download/vessel-windows-cuda.exe
+curl -L -o vessel.exe https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-windows-cuda.exe
 ```
 
 **Linux (NVIDIA):**
 ```bash
-curl -L -o vessel https://github.com/youruser/vessel/releases/latest/download/vessel-linux-cuda
+curl -L -o vessel https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-linux-cuda
 chmod +x vessel
 ```
 
 **macOS (Apple Silicon):**
 ```bash
-curl -L -o vessel https://github.com/youruser/vessel/releases/latest/download/vessel-macos-metal
+curl -L -o vessel https://github.com/bhuwanb23/vessel/releases/latest/download/vessel-macos-metal
 chmod +x vessel
 ```
 
@@ -184,7 +184,7 @@ Any GGUF model from Hugging Face works with `--model <url>`, even if not in the 
 ### Build
 
 ```bash
-git clone https://github.com/youruser/vessel.git
+git clone https://github.com/bhuwanb23/vessel.git
 cd vessel
 
 # NVIDIA Windows
