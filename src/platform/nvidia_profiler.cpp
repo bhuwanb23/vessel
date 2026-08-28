@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <unordered_map>
 
 // =============================================================================
 // NVIDIA Profiler (Windows + CUDA)
@@ -132,6 +133,31 @@ public:
             spec.nvme_random_4k_mbs = measure_disk_random_4k(model_path_for_disk_bench);
         }
         
+        // GPU memory bandwidth (GB/s)
+        // Always prefer the curated fallback table — it has accurate spec values
+        // for every GPU including GDDR7 (Blackwell) which doesn't follow the
+        // standard DDR formula. The formula-derived value is only used as a last
+        // resort when the GPU isn't in any table.
+        double fallback_bw = lookup_value(BW_FALLBACK, spec.gpu_name, 0.0);
+        if (fallback_bw > 0) {
+            spec.gpu_bandwidth_gbs = fallback_bw;
+        } else {
+            // Unknown GPU: derive from memory clock + bus width
+            unsigned int mem_clock_mhz = 0;
+            if (nvmlDeviceGetMaxClockInfo(device_, NVML_CLOCK_MEM, &mem_clock_mhz) != NVML_SUCCESS)
+                mem_clock_mhz = 0;
+            int bus_width = lookup_int(BUS_WIDTH_TABLE, spec.gpu_name, 0);
+            if (bus_width > 0 && mem_clock_mhz > 0) {
+                spec.gpu_bandwidth_gbs = (double(mem_clock_mhz) * 2.0 * bus_width) / 8.0 / 1000.0;
+            }
+        }
+        
+        // TFLOPS (FP16) from lookup table
+        spec.gpu_tflops_fp16 = lookup_value(TFLOPS_TABLE, spec.gpu_name, 20.0);
+        
+        // RAM bandwidth estimate (DDR4/DDR5)
+        spec.ram_bandwidth_gbs = 40.0;  // Conservative DDR5 estimate
+        
         // Generate fingerprint
         spec.hardware_fingerprint = generate_fingerprint(spec);
         
@@ -199,6 +225,78 @@ private:
     bool initialized_;
     nvmlDevice_t device_;
     std::string compute_capability_;
+    
+    // =========================================================================
+    // GPU Bandwidth & TFLOPS Lookup Tables
+    // =========================================================================
+    
+    // Bus width (bits) by GPU model substring
+    static inline const std::unordered_map<std::string, int> BUS_WIDTH_TABLE = {
+        {"RTX 3060", 192}, {"RTX 3070", 256}, {"RTX 3080", 320}, {"RTX 3090", 384},
+        {"RTX 4060", 128}, {"RTX 4070", 192}, {"RTX 4080", 256}, {"RTX 4090", 384},
+        {"RTX 5060", 128}, {"RTX 5070", 192}, {"RTX 5080", 256}, {"RTX 5090", 512},
+        {"RTX 2060", 192}, {"RTX 2070", 256}, {"RTX 2080", 256}, {"RTX 2080 Ti", 352},
+        {"GTX 1660", 192},
+        {"A100", 5120}, {"A40", 384}, {"A30", 384},
+        {"H100", 5120}, {"H200", 5120}, {"H800", 5120},
+    };
+    
+    // Fallback memory bandwidth (GB/s) — spec-sheet values for when NVML clock fails
+    static inline const std::unordered_map<std::string, double> BW_FALLBACK = {
+        {"RTX 3060", 360.0}, {"RTX 3070", 448.0}, {"RTX 3080", 760.0}, {"RTX 3090", 936.0},
+        {"RTX 4060", 272.0}, {"RTX 4070", 504.0}, {"RTX 4080", 717.0}, {"RTX 4090", 1008.0},
+        {"RTX 5060", 336.0}, {"RTX 5070", 504.0}, {"RTX 5080", 896.0}, {"RTX 5090", 1792.0},
+        {"RTX 2060", 336.0}, {"RTX 2070", 448.0}, {"RTX 2080", 448.0}, {"RTX 2080 Ti", 616.0},
+        {"A100", 2039.0}, {"A40", 696.0}, {"H100", 3350.0}, {"H200", 4800.0},
+    };
+    
+    // TFLOPS (FP16) by GPU model substring
+    static inline const std::unordered_map<std::string, double> TFLOPS_TABLE = {
+        {"RTX 3060", 13.0}, {"RTX 3070", 20.0}, {"RTX 3080", 30.0}, {"RTX 3090", 36.0},
+        {"RTX 4060", 15.0}, {"RTX 4070", 20.0}, {"RTX 4080", 30.0}, {"RTX 4090", 40.0},
+        {"RTX 5060", 20.0}, {"RTX 5070", 25.0}, {"RTX 5080", 35.0}, {"RTX 5090", 50.0},
+        {"RTX 2060", 6.5},  {"RTX 2070", 7.5},  {"RTX 2080", 10.0},
+        {"A100", 78.0}, {"A40", 37.0}, {"H100", 135.0}, {"H200", 140.0},
+    };
+    
+    static double lookup_value(const std::unordered_map<std::string, double>& table,
+                               const std::string& name, double fallback) {
+        // Prefer longer matches; break ties by earlier position in name
+        double result = fallback;
+        size_t best_len = 0;
+        size_t best_pos = std::string::npos;
+        for (const auto& [pattern, val] : table) {
+            size_t pos = name.find(pattern);
+            if (pos != std::string::npos) {
+                if (pattern.size() > best_len ||
+                    (pattern.size() == best_len && pos < best_pos)) {
+                    result = val;
+                    best_len = pattern.size();
+                    best_pos = pos;
+                }
+            }
+        }
+        return result;
+    }
+    
+    static int lookup_int(const std::unordered_map<std::string, int>& table,
+                          const std::string& name, int fallback) {
+        int result = fallback;
+        size_t best_len = 0;
+        size_t best_pos = std::string::npos;
+        for (const auto& [pattern, val] : table) {
+            size_t pos = name.find(pattern);
+            if (pos != std::string::npos) {
+                if (pattern.size() > best_len ||
+                    (pattern.size() == best_len && pos < best_pos)) {
+                    result = val;
+                    best_len = pattern.size();
+                    best_pos = pos;
+                }
+            }
+        }
+        return result;
+    }
     
     // =========================================================================
     // Disk I/O Measurement

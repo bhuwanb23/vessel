@@ -24,6 +24,51 @@ static const std::unordered_map<std::string, int> BUS_WIDTH_TABLE = {
     {"RTX 5070", 192},
     {"RTX 5080", 256},
     {"RTX 5090", 512},
+    // RTX 20 series
+    {"RTX 2060", 192},
+    {"RTX 2070", 256},
+    {"RTX 2080", 256},
+    {"RTX 2080 Ti", 352},
+    // GTX 16 series
+    {"GTX 1660", 192},
+    // A-series (data center)
+    {"A100", 5120},
+    {"A40", 384},
+    {"A30", 384},
+    // H-series (data center)
+    {"H100", 5120},
+    {"H200", 5120},
+    {"H800", 5120},
+};
+
+// Fallback memory bandwidth (GB/s) when NVML can't report memory clock.
+// These are spec-sheet numbers for common GPUs. Used when clock_mhz == 0.
+static const std::unordered_map<std::string, double> BANDWIDTH_FALLBACK_TABLE = {
+    // RTX 30 series (GDDR6X)
+    {"RTX 3060", 360.0},
+    {"RTX 3070", 448.0},
+    {"RTX 3080", 760.0},
+    {"RTX 3090", 936.0},
+    // RTX 40 series (GDDR6X)
+    {"RTX 4060", 272.0},
+    {"RTX 4070", 504.0},
+    {"RTX 4080", 717.0},
+    {"RTX 4090", 1008.0},
+    // RTX 50 series (GDDR7)
+    {"RTX 5060", 336.0},
+    {"RTX 5070", 504.0},
+    {"RTX 5080", 896.0},
+    {"RTX 5090", 1792.0},
+    // RTX 20 series (GDDR6)
+    {"RTX 2060", 336.0},
+    {"RTX 2070", 448.0},
+    {"RTX 2080", 448.0},
+    {"RTX 2080 Ti", 616.0},
+    // Data center
+    {"A100", 2039.0},
+    {"A40", 696.0},
+    {"H100", 3350.0},
+    {"H200", 4800.0},
 };
 
 // Find bus width for a GPU name by substring matching
@@ -34,6 +79,16 @@ static int lookup_bus_width(const std::string& gpu_name) {
         }
     }
     return 0; // not found
+}
+
+// Find fallback bandwidth for a GPU name (spec-sheet GB/s)
+static double lookup_fallback_bandwidth(const std::string& gpu_name) {
+    for (const auto& [pattern, bw] : BANDWIDTH_FALLBACK_TABLE) {
+        if (gpu_name.find(pattern) != std::string::npos) {
+            return bw;
+        }
+    }
+    return 0.0; // not found
 }
 
 std::vector<GpuProfile> profile_gpus() {
@@ -105,6 +160,23 @@ std::vector<GpuProfile> profile_gpus() {
             // bandwidth_GB_per_sec = (clock_MHz * 2 * bus_width_bits) / 8 / 1000
             profile.memory_bandwidth_gb_per_sec =
                 (static_cast<double>(profile.memory_clock_mhz) * 2.0 * profile.bus_width_bits) / 8.0 / 1000.0;
+            
+            // Fallback: if derived bandwidth is suspiciously low (GDDR7 or new arch
+            // may not work with the standard DDR formula), use spec-sheet value.
+            // Consumer GPUs should have at least 200 GB/s.
+            if (profile.memory_bandwidth_gb_per_sec < 200.0) {
+                double fallback = lookup_fallback_bandwidth(profile.name);
+                if (fallback > 0) {
+                    profile.memory_bandwidth_gb_per_sec = fallback;
+                }
+            }
+        } else {
+            // Bus width not found, but try full bandwidth fallback
+            double fallback = lookup_fallback_bandwidth(profile.name);
+            if (fallback > 0) {
+                profile.memory_bandwidth_gb_per_sec = fallback;
+                profile.bandwidth_known = true;
+            }
         }
 
         // Temperature

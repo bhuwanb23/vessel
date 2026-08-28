@@ -48,7 +48,7 @@ bool fetch_range(const std::string& url, uint64_t range_end, std::vector<uint8_t
     }
 
     // Open session
-    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Vessel/1.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
@@ -199,7 +199,7 @@ bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
         url_path += std::wstring(url_comp.lpszExtraInfo, url_comp.dwExtraInfoLength);
     }
 
-    HINTERNET hSession = WinHttpOpen(L"LLMPlanner/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Vessel/1.0",
                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                       WINHTTP_NO_PROXY_NAME,
                                       WINHTTP_NO_PROXY_BYPASS, 0);
