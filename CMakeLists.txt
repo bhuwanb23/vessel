@@ -214,6 +214,7 @@ set(HTTPLIB_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/external/httplib)
 if(LLAMA_AVAILABLE)
 add_executable(vessel
     src/planner/main.cpp
+    src/web/web_server.cpp
     ${PLANNER_SOURCES}
     ${PROFILER_SOURCES}
     ${FETCHER_SOURCES}
@@ -223,7 +224,12 @@ add_executable(vessel
     ${RECOMMEND_SOURCES}
 )
 
-target_include_directories(vessel PRIVATE ${SHARED_INCLUDE_DIRS})
+target_include_directories(vessel PRIVATE
+    ${SHARED_INCLUDE_DIRS}
+    ${HTTPLIB_INCLUDE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
+    src/web
+)
 target_link_directories(vessel PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(vessel PRIVATE ${LLAMA_LIBS} ${PLATFORM_LIBS})
 

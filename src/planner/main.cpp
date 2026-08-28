@@ -29,6 +29,7 @@
 #include "platform/platform_factory.h"
 #include "recommend/catalog_loader.h"
 #include "recommend/recommendation_engine.h"
+#include "web_server.h"
 
 #include <cstdio>
 #include <string>
@@ -81,6 +82,9 @@ int main(int argc, char* argv[]) {
     std::string platform_override;     // --platform: force specific platform (cuda, hip, metal, cpu)
     int gpu_index            = -1;     // --gpu: select specific GPU by index
     std::string gpu_name_pattern;      // --gpu-name: select GPU by name pattern
+    bool serve_ui            = false;  // --serve-ui: start web dashboard
+    bool no_browser           = false;  // --no-browser: don't auto-open browser
+    int  ui_port              = 8080;   // --port: dashboard port
     bool recommend_mode      = false;  // --recommend: show model recommendations
     std::string use_case     = "all";  // --use-case: filter by use case
     int top_n                = 8;      // --top: number of recommendations to show
@@ -216,6 +220,13 @@ int main(int argc, char* argv[]) {
             if (gpu_index < 0) gpu_index = -1;
         } else if (arg == "--gpu-name" && i + 1 < argc) {
             gpu_name_pattern = argv[++i];
+        } else if (arg == "--serve-ui") {
+            serve_ui = true;
+        } else if (arg == "--no-browser") {
+            no_browser = true;
+        } else if (arg == "--port" && i + 1 < argc) {
+            ui_port = atoi(argv[++i]);
+            if (ui_port < 1024 || ui_port > 65535) ui_port = 8080;
         } else if (arg == "--recommend") {
             recommend_mode = true;
         } else if (arg == "--use-case" && i + 1 < argc) {
@@ -235,6 +246,11 @@ int main(int argc, char* argv[]) {
             model_url = arg;
             model_specified = true;
         }
+    }
+
+    // --serve-ui: Start web dashboard and exit
+    if (serve_ui) {
+        return start_web_server(ui_port, "", !no_browser) ? 0 : 1;
     }
 
     // Mutual exclusivity: --recommend and --model cannot be used together
