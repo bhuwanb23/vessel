@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ===========================================================================
-  # Tests — Run on every push/PR (no llama.cpp needed for predictor tests)
+  # Tests — Run on every push/PR (no llama.cpp needed)
   # ===========================================================================
   test:
     runs-on: ubuntu-latest
@@ -20,22 +20,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
 
-      - name: Configure and Build
+      - name: Configure CMake
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --config Debug -j2
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-unused-variable -Wno-unused-function"
 
-      - name: Run Catalog Tests
+      - name: Build tests
+        run: cmake --build build --target catalog_test predictor_test -j$(nproc)
+
+      - name: Run catalog_test
         run: ./build/bin/catalog_test
 
-      - name: Run Recommendation Tests
-        run: ./build/bin/recommend_test
-
-      - name: Run Predictor Tests
+      - name: Run predictor_test
         run: ./build/bin/predictor_test
 
   # ===========================================================================
-  # Release — Manual trigger or tag push
+  # Release — Tag push creates GitHub Release
   # ===========================================================================
   release:
     runs-on: ubuntu-latest
@@ -52,7 +52,7 @@ jobs:
             ## Vessel ${{ github.ref_name }}
 
             ### Quick Start
-            Download `vessel-windows-cuda.exe` (NVIDIA) or `vessel-windows-cpu.exe` (CPU-only) and run:
+            Download the Windows binary and run:
 
             ```bash
             # See what models fit your hardware

@@ -184,8 +184,20 @@ elseif(PLATFORM_MACOS)
 endif()
 
 # ============================================
-# vessel — Main unified binary
+# Check if llama.cpp is available
 # ============================================
+if(EXISTS "${LLAMA_PATH}/include/llama.h")
+    set(LLAMA_AVAILABLE TRUE)
+    message(STATUS "llama.cpp found at ${LLAMA_PATH}")
+else()
+    set(LLAMA_AVAILABLE FALSE)
+    message(STATUS "llama.cpp NOT found — building predictor/catalog tests only")
+endif()
+
+# ============================================
+vessel — Main unified binary
+# ============================================
+if(LLAMA_AVAILABLE)
 add_executable(vessel
     src/planner/main.cpp
     ${PLANNER_SOURCES}
@@ -218,6 +230,8 @@ target_include_directories(e2e_test PRIVATE ${SHARED_INCLUDE_DIRS})
 target_link_directories(e2e_test PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(e2e_test PRIVATE ${LLAMA_LIBS} ${PLATFORM_LIBS})
 
+endif() # LLAMA_AVAILABLE
+
 # ============================================
 # predictor_test — Step 3 standalone test
 # ============================================
@@ -233,8 +247,9 @@ target_include_directories(predictor_test PRIVATE
 )
 
 # ============================================
-# sparse_ffn_test — Step 10 Phase D validation
+# sparse_ffn_test — Step 10 Phase D validation (needs llama.cpp)
 # ============================================
+if(LLAMA_AVAILABLE)
 add_executable(sparse_ffn_test
     src/hotcold/sparse_ffn_test.cpp
     src/hotcold/sparse_ffn.cpp
@@ -260,6 +275,7 @@ if(HAS_CUDA)
 else()
     target_link_libraries(sparse_ffn_test PRIVATE llama ggml ggml-base ggml-cpu)
 endif()
+endif() # LLAMA_AVAILABLE for sparse_ffn_test
 
 # ============================================
 # Layer-Streaming Prediction Test
@@ -317,6 +333,9 @@ endif()
 # ============================================
 # Step 11 Phase I Validation Test
 # ============================================
+# step11_test needs llama.cpp
+# ============================================
+if(LLAMA_AVAILABLE)
 add_executable(step11_test
     src/platform/step11_validation.cpp
     src/platform/platform_factory.cpp
@@ -357,6 +376,7 @@ target_link_directories(step11_test PRIVATE
 )
 
 target_link_libraries(step11_test PRIVATE ${PLATFORM_LIBS})
+endif() # LLAMA_AVAILABLE for step11_test
 
 # ============================================
 # Step 12 Phase A — Catalog Test
@@ -372,8 +392,9 @@ target_include_directories(catalog_test PRIVATE
 )
 
 # ============================================
-# Step 12 Phase B — Recommendation Engine Test
+# Step 12 Phase B — Recommendation Engine Test (needs llama.cpp)
 # ============================================
+if(LLAMA_AVAILABLE)
 add_executable(recommend_test
     src/recommend/recommendation_test.cpp
     src/recommend/recommendation_engine.cpp
@@ -409,6 +430,7 @@ if(HAS_CUDA)
 else()
     target_link_libraries(recommend_test PRIVATE llama ggml ggml-base ggml-cpu ${PLATFORM_LIBS})
 endif()
+endif() # LLAMA_AVAILABLE for recommend_test
 
 # ============================================
 # Installation
