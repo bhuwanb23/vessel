@@ -43,7 +43,7 @@ if(CUDAToolkit_FOUND)
     message(STATUS "CUDA found: ${CUDAToolkit_VERSION}")
 else()
     set(HAS_CUDA FALSE)
-    message(STATUS "CUDA not found — building CPU-only")
+    message(STATUS "CUDA not found - building CPU-only")
 endif()
 
 # NVML (Windows only, for GPU monitoring)
@@ -54,7 +54,7 @@ else()
 endif()
 
 # ============================================
-# llama.cpp — Pre-built library
+# llama.cpp - Pre-built library
 # ============================================
 set(LLAMA_PATH "${CMAKE_SOURCE_DIR}/llama.cpp" CACHE PATH "llama.cpp source path")
 set(LLAMA_BUILD "${LLAMA_PATH}/build" CACHE PATH "llama.cpp build path")
@@ -191,11 +191,11 @@ if(EXISTS "${LLAMA_PATH}/include/llama.h")
     message(STATUS "llama.cpp found at ${LLAMA_PATH}")
 else()
     set(LLAMA_AVAILABLE FALSE)
-    message(STATUS "llama.cpp NOT found — building predictor/catalog tests only")
+    message(STATUS "llama.cpp NOT found - building predictor/catalog tests only")
 endif()
 
 # ============================================
-vessel — Main unified binary
+# vessel - Main unified binary
 # ============================================
 if(LLAMA_AVAILABLE)
 add_executable(vessel
@@ -214,7 +214,7 @@ target_link_directories(vessel PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(vessel PRIVATE ${LLAMA_LIBS} ${PLATFORM_LIBS})
 
 # ============================================
-# e2e_test — End-to-end test suite
+# e2e_test - End-to-end test suite
 # ============================================
 add_executable(e2e_test
     src/planner/e2e_test.cpp
@@ -233,7 +233,7 @@ target_link_libraries(e2e_test PRIVATE ${LLAMA_LIBS} ${PLATFORM_LIBS})
 endif() # LLAMA_AVAILABLE
 
 # ============================================
-# predictor_test — Step 3 standalone test
+# predictor_test - Step 3 standalone test
 # ============================================
 add_executable(predictor_test
     src/predictor/predictor_test.cpp
@@ -247,7 +247,7 @@ target_include_directories(predictor_test PRIVATE
 )
 
 # ============================================
-# sparse_ffn_test — Step 10 Phase D validation (needs llama.cpp)
+# sparse_ffn_test - Step 10 Phase D validation (needs llama.cpp)
 # ============================================
 if(LLAMA_AVAILABLE)
 add_executable(sparse_ffn_test
@@ -379,7 +379,7 @@ target_link_libraries(step11_test PRIVATE ${PLATFORM_LIBS})
 endif() # LLAMA_AVAILABLE for step11_test
 
 # ============================================
-# Step 12 Phase A — Catalog Test
+# Step 12 Phase A - Catalog Test
 # ============================================
 add_executable(catalog_test
     src/recommend/catalog_test.cpp
@@ -392,7 +392,7 @@ target_include_directories(catalog_test PRIVATE
 )
 
 # ============================================
-# Step 12 Phase B — Recommendation Engine Test (needs llama.cpp)
+# Step 12 Phase B - Recommendation Engine Test (needs llama.cpp)
 # ============================================
 if(LLAMA_AVAILABLE)
 add_executable(recommend_test
