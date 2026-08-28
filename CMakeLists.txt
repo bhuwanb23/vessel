@@ -195,6 +195,20 @@ else()
 endif()
 
 # ============================================
+# Web Dashboard - Embed assets at build time
+# ============================================
+include(${CMAKE_SOURCE_DIR}/cmake/embed_files.cmake)
+
+embed_files(embedded_web.h
+    ${CMAKE_SOURCE_DIR}/web/index.html   WEB_INDEX_HTML   text/html
+    ${CMAKE_SOURCE_DIR}/web/app.js       WEB_APP_JS       application/javascript
+    ${CMAKE_SOURCE_DIR}/web/styles.css   WEB_STYLES_CSS   text/css
+)
+
+# httplib include path
+set(HTTPLIB_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/external/httplib)
+
+# ============================================
 # vessel - Main unified binary
 # ============================================
 if(LLAMA_AVAILABLE)
