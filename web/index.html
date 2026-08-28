@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vessel - LLM Deployment Planner</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>Vessel</h1>
+            <span class="subtitle">LLM Deployment Planner</span>
+        </div>
+        <div class="header-right">
+            <span id="platform-badge" class="badge">Detecting...</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Hardware Panel -->
+        <section id="hardware-panel" class="panel">
+            <h2>Hardware</h2>
+            <div class="gauges">
+                <div class="gauge">
+                    <label>GPU</label>
+                    <div class="gauge-bar"><div id="vram-bar" class="gauge-fill" style="width:0%"></div></div>
+                    <span id="vram-text">--</span>
+                </div>
+                <div class="gauge">
+                    <label>RAM</label>
+                    <div class="gauge-bar"><div id="ram-bar" class="gauge-fill" style="width:0%"></div></div>
+                    <span id="ram-text">--</span>
+                </div>
+                <div class="gauge">
+                    <label>Temp</label>
+                    <span id="temp-text" class="metric">--</span>
+                </div>
+                <div class="gauge">
+                    <label>GPU BW</label>
+                    <span id="bw-text" class="metric">--</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Model Input -->
+        <section id="model-input-panel" class="panel">
+            <h2>Analyze Model</h2>
+            <div class="input-row">
+                <input type="text" id="model-url" placeholder="Paste HuggingFace GGUF URL or local path...">
+                <button id="btn-analyze" onclick="analyzeModel()">Analyze</button>
+            </div>
+            <div id="analyze-status" class="status"></div>
+        </section>
+
+        <!-- Strategy Table -->
+        <section id="strategy-panel" class="panel hidden">
+            <h2>Strategies</h2>
+            <div id="model-info" class="model-info"></div>
+            <table id="strategy-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Placement</th>
+                        <th>GPU Layers</th>
+                        <th>Context</th>
+                        <th>KV</th>
+                        <th>VRAM</th>
+                        <th>RAM</th>
+                        <th>tok/s</th>
+                        <th>TTFT</th>
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="strategy-body"></tbody>
+            </table>
+        </section>
+
+        <!-- Recommendations -->
+        <section id="recommend-panel" class="panel">
+            <h2>Recommendations</h2>
+            <div class="controls">
+                <select id="rec-priority" onchange="loadRecommendations()">
+                    <option value="balanced">Balanced</option>
+                    <option value="speed">Speed</option>
+                    <option value="quality">Quality</option>
+                </select>
+                <select id="rec-usecase" onchange="loadRecommendations()">
+                    <option value="all">All</option>
+                    <option value="chat">Chat</option>
+                    <option value="coding">Coding</option>
+                    <option value="reasoning">Reasoning</option>
+                </select>
+                <button onclick="loadRecommendations()">Refresh</button>
+            </div>
+            <table id="rec-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Label</th>
+                        <th>Model</th>
+                        <th>Quant</th>
+                        <th>Strategy</th>
+                        <th>VRAM</th>
+                        <th>tok/s</th>
+                        <th>Quality</th>
+                        <th>Size</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="rec-body"></tbody>
+            </table>
+            <div id="rec-summary" class="summary"></div>
+        </section>
+
+        <!-- Calibration -->
+        <section id="calibration-panel" class="panel">
+            <h2>Calibration History</h2>
+            <div id="cal-info" class="cal-info"></div>
+            <button onclick="loadCalibration()">Refresh</button>
+        </section>
+
+        <!-- Execution Log -->
+        <section id="exec-panel" class="panel hidden">
+            <h2>Execution</h2>
+            <div id="exec-log" class="log"></div>
+        </section>
+    </main>
+
+    <footer>
+        <span>Vessel v0.1.0</span>
+        <span id="footer-status">Ready</span>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
