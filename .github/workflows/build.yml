@@ -1,147 +1,14 @@
-name: Build and Release
+name: Build and Test
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
   pull_request:
     branches: [main]
 
-env:
-  BUILD_TYPE: Release
-  LLAMA_CPP_VERSION: b9999
-
 jobs:
   # ===========================================================================
-  # Windows NVIDIA (CUDA) — Primary build
-  # ===========================================================================
-  build-windows-cuda:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install CMake
-        uses: lukka/get-cmake@latest
-
-      - name: Install CUDA
-        uses: Jimver/cuda-toolkit@v0.2.21
-        id: cuda-toolkit
-        with:
-          method: network
-
-      - name: Clone and build llama.cpp
-        run: |
-          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
-          cd llama.cpp
-          cmake -B build -DGGML_CUDA=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-          cmake --build build --config ${{ env.BUILD_TYPE }} -j
-
-      - name: Configure vessel
-        run: cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-
-      - name: Build vessel
-        run: cmake --build build --config ${{ env.BUILD_TYPE }}
-
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: vessel-windows-cuda
-          path: build/bin/${{ env.BUILD_TYPE }}/vessel.exe
-
-  # ===========================================================================
-  # Windows CPU-only — Fallback build
-  # ===========================================================================
-  build-windows-cpu:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install CMake
-        uses: lukka/get-cmake@latest
-
-      - name: Clone and build llama.cpp
-        run: |
-          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
-          cd llama.cpp
-          cmake -B build -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-          cmake --build build --config ${{ env.BUILD_TYPE }} -j
-
-      - name: Configure vessel
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-
-      - name: Build vessel
-        run: cmake --build build --config ${{ env.BUILD_TYPE }}
-
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: vessel-windows-cpu
-          path: build/bin/${{ env.BUILD_TYPE }}/vessel.exe
-
-  # ===========================================================================
-  # Linux CPU-only — Universal build
-  # ===========================================================================
-  build-linux-cpu:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
-
-      - name: Clone and build llama.cpp
-        run: |
-          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
-          cd llama.cpp
-          cmake -B build -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-          cmake --build build --config ${{ env.BUILD_TYPE }} -j
-
-      - name: Configure vessel
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-
-      - name: Build vessel
-        run: cmake --build build --config ${{ env.BUILD_TYPE }}
-
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: vessel-linux-cpu
-          path: build/bin/vessel
-
-  # ===========================================================================
-  # macOS (Metal) — Apple Silicon build
-  # ===========================================================================
-  build-macos-metal:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install CMake
-        uses: lukka/get-cmake@latest
-
-      - name: Clone and build llama.cpp
-        run: |
-          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
-          cd llama.cpp
-          cmake -B build -DGGML_METAL=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-          cmake --build build --config ${{ env.BUILD_TYPE }} -j
-
-      - name: Configure vessel
-        run: cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-
-      - name: Build vessel
-        run: cmake --build build --config ${{ env.BUILD_TYPE }}
-
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: vessel-macos-metal
-          path: build/bin/vessel
-
-  # ===========================================================================
-  # Tests — Run on every PR
+  # Tests — Run on every push/PR (no llama.cpp needed for predictor tests)
   # ===========================================================================
   test:
     runs-on: ubuntu-latest
@@ -153,78 +20,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
 
-      - name: Clone and build llama.cpp
+      - name: Configure and Build
         run: |
-          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
-          cd llama.cpp
-          cmake -B build -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --config Debug -j
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --config Debug -j2
 
-      - name: Configure vessel
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+      - name: Run Catalog Tests
+        run: ./build/bin/catalog_test
 
-      - name: Build vessel
-        run: cmake --build build --config Debug
+      - name: Run Recommendation Tests
+        run: ./build/bin/recommend_test
 
-      - name: Run Tests
-        run: |
-          cd build/bin/Debug
-          ./e2e_test || ./e2e_test.exe
-          ./recommend_test || ./recommend_test.exe
-          ./catalog_test || ./catalog_test.exe
-          ./predictor_test || ./predictor_test.exe
+      - name: Run Predictor Tests
+        run: ./build/bin/predictor_test
 
   # ===========================================================================
-  # Create GitHub Release (on tag push)
+  # Release — Manual trigger or tag push
   # ===========================================================================
   release:
-    needs: [build-windows-cuda, build-windows-cpu, build-linux-cpu, build-macos-metal]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Prepare release files
-        run: |
-          mkdir -p release
-          cp vessel-windows-cuda/vessel.exe release/vessel-windows-cuda.exe 2>/dev/null || true
-          cp vessel-windows-cpu/vessel.exe release/vessel-windows-cpu.exe 2>/dev/null || true
-          cp vessel-linux-cpu/vessel release/vessel-linux-cpu 2>/dev/null || true
-          cp vessel-macos-metal/vessel release/vessel-macos-metal 2>/dev/null || true
-          chmod +x release/vessel-linux-cpu release/vessel-macos-metal 2>/dev/null || true
-          ls -la release/
+      - uses: actions/checkout@v4
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*
           body: |
             ## Vessel ${{ github.ref_name }}
 
-            ### Downloads
-            | Platform | Binary | Notes |
-            |----------|--------|-------|
-            | Windows (NVIDIA) | `vessel-windows-cuda.exe` | Requires CUDA 12+ |
-            | Windows (CPU) | `vessel-windows-cpu.exe` | No GPU required |
-            | Linux (CPU) | `vessel-linux-cpu` | No GPU required |
-            | macOS (Apple Silicon) | `vessel-macos-metal` | M1/M2/M3/M4 |
-
             ### Quick Start
+            Download `vessel-windows-cuda.exe` (NVIDIA) or `vessel-windows-cpu.exe` (CPU-only) and run:
+
             ```bash
             # See what models fit your hardware
-            vessel --recommend
+            vessel.exe --recommend
 
             # Check a specific model
-            vessel --model <huggingface-url>
+            vessel.exe --model <huggingface-url>
 
             # Download and run
-            vessel --model <url> --execute
+            vessel.exe --model <url> --execute
             ```
 
-            ### What's New
-            See [CHANGELOG.md](CHANGELOG.md) for details.
+            ### Building from Source
+            See [README.md](README.md#building-from-source) for build instructions.
           draft: false
           prerelease: false
