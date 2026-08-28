@@ -60,7 +60,7 @@ function(embed_files OUTPUT_HEADER)
         if(_byte_count GREATER 0)
             string(APPEND _array ", ")
         endif()
-        string(APPEND _array "0x00};\n")  // null terminator
+        string(APPEND _array "0x00};\n")
 
         # Add accessor as const char*
         set(_array "${_array}static const char* ${_var} = reinterpret_cast<const char*>(${_var}_DATA);\n")
