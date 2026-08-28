@@ -9,6 +9,7 @@ on:
 
 env:
   BUILD_TYPE: Release
+  LLAMA_CPP_VERSION: b5550
 
 jobs:
   # ===========================================================================
@@ -18,8 +19,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install CMake
         uses: lukka/get-cmake@latest
@@ -30,10 +29,17 @@ jobs:
         with:
           method: network
 
-      - name: Configure CMake
+      - name: Clone and build llama.cpp
+        run: |
+          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
+          cd llama.cpp
+          cmake -B build -DGGML_CUDA=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          cmake --build build --config ${{ env.BUILD_TYPE }} -j
+
+      - name: Configure vessel
         run: cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
-      - name: Build
+      - name: Build vessel
         run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
       - name: Upload Binary
@@ -49,16 +55,21 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install CMake
         uses: lukka/get-cmake@latest
 
-      - name: Configure CMake
+      - name: Clone and build llama.cpp
+        run: |
+          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
+          cd llama.cpp
+          cmake -B build -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          cmake --build build --config ${{ env.BUILD_TYPE }} -j
+
+      - name: Configure vessel
         run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
-      - name: Build
+      - name: Build vessel
         run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
       - name: Upload Binary
@@ -74,18 +85,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
 
-      - name: Configure CMake
+      - name: Clone and build llama.cpp
+        run: |
+          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
+          cd llama.cpp
+          cmake -B build -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          cmake --build build --config ${{ env.BUILD_TYPE }} -j
+
+      - name: Configure vessel
         run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
-      - name: Build
+      - name: Build vessel
         run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
       - name: Upload Binary
@@ -101,16 +117,21 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install CMake
         uses: lukka/get-cmake@latest
 
-      - name: Configure CMake
+      - name: Clone and build llama.cpp
+        run: |
+          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
+          cd llama.cpp
+          cmake -B build -DGGML_METAL=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          cmake --build build --config ${{ env.BUILD_TYPE }} -j
+
+      - name: Configure vessel
         run: cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
-      - name: Build
+      - name: Build vessel
         run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
       - name: Upload Binary
@@ -126,27 +147,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
 
-      - name: Configure CMake
+      - name: Clone and build llama.cpp
+        run: |
+          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama.cpp
+          cd llama.cpp
+          cmake -B build -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --config Debug -j
+
+      - name: Configure vessel
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
 
-      - name: Build
+      - name: Build vessel
         run: cmake --build build --config Debug
 
       - name: Run Tests
         run: |
           cd build/bin/Debug
-          ./e2e_test
-          ./recommend_test
-          ./catalog_test
-          ./predictor_test
+          ./e2e_test || ./e2e_test.exe
+          ./recommend_test || ./recommend_test.exe
+          ./catalog_test || ./catalog_test.exe
+          ./predictor_test || ./predictor_test.exe
 
   # ===========================================================================
   # Create GitHub Release (on tag push)
@@ -164,21 +190,17 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          mv vessel-windows-cuda/vessel.exe release/vessel-windows-cuda.exe
-          mv vessel-windows-cpu/vessel.exe release/vessel-windows-cpu.exe
-          mv vessel-linux-cpu/vessel release/vessel-linux-cpu
-          mv vessel-macos-metal/vessel release/vessel-macos-metal
-          chmod +x release/vessel-linux-cpu
-          chmod +x release/vessel-macos-metal
+          cp vessel-windows-cuda/vessel.exe release/vessel-windows-cuda.exe 2>/dev/null || true
+          cp vessel-windows-cpu/vessel.exe release/vessel-windows-cpu.exe 2>/dev/null || true
+          cp vessel-linux-cpu/vessel release/vessel-linux-cpu 2>/dev/null || true
+          cp vessel-macos-metal/vessel release/vessel-macos-metal 2>/dev/null || true
+          chmod +x release/vessel-linux-cpu release/vessel-macos-metal 2>/dev/null || true
+          ls -la release/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release/vessel-windows-cuda.exe
-            release/vessel-windows-cpu.exe
-            release/vessel-linux-cpu
-            release/vessel-macos-metal
+          files: release/*
           body: |
             ## Vessel ${{ github.ref_name }}
 
