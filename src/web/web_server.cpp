@@ -18,8 +18,9 @@
 #include "recommend/recommendation_engine.h"
 #include "platform/platform_factory.h"
 
-#define CPPHTTPLIB_OPENSSL_SUPPORT 0
-#define CPPHTTPLIB_NO_EXCEPTIONS
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#undef CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
 #include "httplib.h"
 
 #include <nlohmann/json.hpp>
