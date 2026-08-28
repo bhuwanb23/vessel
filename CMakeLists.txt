@@ -144,6 +144,7 @@ set(SHARED_INCLUDE_DIRS
     src/recommend
     ${LLAMA_PATH}/include
     ${LLAMA_PATH}/ggml/include
+    ${LLAMA_PATH}/vendor
     ${LLAMA_PATH}/vendor/nlohmann
 )
 
@@ -158,6 +159,8 @@ set(SHARED_LINK_DIRS
     ${LLAMA_BUILD}/src
     ${LLAMA_BUILD}/ggml/src
     ${LLAMA_BUILD}/bin
+    ${CUDAToolkit_LIBRARY_DIR}
+    "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9/lib/x64"
 )
 
 if(HAS_CUDA)

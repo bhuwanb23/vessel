@@ -12,11 +12,30 @@
 #include "matrix.h"
 #include "ranker.h"
 #include "output.h"
+#include "fetcher.h"
 #include "calibration_log.h"
 #include "calibration_aggregator.h"
 #include "recommend/catalog_loader.h"
 #include "recommend/recommendation_engine.h"
 #include "platform/platform_factory.h"
+
+#include <cstdio>
+#include <string>
+#include <mutex>
+#include <atomic>
+#include <thread>
+#include <chrono>
+
+// Timer utility (same as main.cpp)
+class Timer {
+    std::chrono::high_resolution_clock::time_point t0;
+public:
+    Timer() : t0(std::chrono::high_resolution_clock::now()) {}
+    double elapsed_ms() {
+        auto now = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration<double, std::milli>(now - t0).count();
+    }
+};
 
 // Explicitly disable SSL - we only need plain HTTP for localhost
 #define CPPHTTPLIB_NO_OPENSSL
@@ -26,11 +45,6 @@
 #include "httplib.h"
 
 #include <nlohmann/json.hpp>
-#include <cstdio>
-#include <string>
-#include <mutex>
-#include <atomic>
-#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -215,11 +229,11 @@ static void handlePredict(const httplib::Request& req, httplib::Response& res) {
         // Add status
         StrategyStatus st = determine_status(hw, r.prediction, r.strategy);
         switch (st) {
-            case StrategyStatus::VIABLE:  sj["status"] = "VIABLE"; break;
-            case StrategyStatus::TIGHT:   sj["status"] = "TIGHT"; break;
-            case StrategyStatus::NO_FIT:  sj["status"] = "NO_FIT"; break;
-            case StrategyStatus::STREAM:  sj["status"] = "STREAM"; break;
-            default:                      sj["status"] = "UNKNOWN"; break;
+            case StrategyStatus::VIABLE:    sj["status"] = "VIABLE"; break;
+            case StrategyStatus::TIGHT:     sj["status"] = "TIGHT"; break;
+            case StrategyStatus::NO_FIT:    sj["status"] = "NO_FIT"; break;
+            case StrategyStatus::LOW_CONF:  sj["status"] = "LOW_CONF"; break;
+            default:                        sj["status"] = "UNKNOWN"; break;
         }
         strategies.push_back(sj);
     }
@@ -261,10 +275,9 @@ static void handleRecommend(const httplib::Request& req, httplib::Response& res)
         json rj;
         rj["model"] = r.model.name;
         rj["quant"] = r.variant.quant;
-        rj["strategy"] = r.best_strategy_description;
-        rj["vram"] = r.best_prediction.memory_vram_bytes;
-        rj["tps"] = r.best_prediction.tokens_per_sec;
-        rj["ttft"] = r.best_prediction.ttft_ms;
+        rj["strategy"] = r.best_strategy_desc;
+        rj["vram"] = (uint64_t)(r.predicted_vram_gb * 1e9);
+        rj["tps"] = r.predicted_tok_s;
         rj["quality"] = r.model.quality_score;
         rj["quality_stars"] = starsString(r.model.quality_score);
         rj["download_gb"] = r.variant.file_size_gb;
