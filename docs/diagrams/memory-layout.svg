@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 280" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="bg3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e293b;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="vram" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#1d4ed8;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="ram" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#6d28d9;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="hot" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#d97706;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="cold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#4f46e5;stop-opacity:0.9" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="800" height="280" fill="url(#bg3)" rx="12"/>
+  
+  <text x="400" y="28" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="600" letter-spacing="2">MEMORY LAYOUT PER STRATEGY</text>
+  
+  <!-- Strategy 1: Full GPU -->
+  <text x="100" y="58" text-anchor="middle" fill="#64748b" font-size="10" font-weight="600">Full GPU</text>
+  <rect x="30" y="68" width="140" height="24" rx="4" fill="url(#vram)"/>
+  <text x="100" y="84" text-anchor="middle" fill="#fff" font-size="8" font-weight="600">All Weights + KV Cache</text>
+  <text x="100" y="108" text-anchor="middle" fill="#3b82f6" font-size="8">Fastest</text>
+  <text x="100" y="120" text-anchor="middle" fill="#64748b" font-size="7">Needs enough VRAM</text>
+  
+  <!-- Strategy 2: GPU/CPU Split -->
+  <text x="300" y="58" text-anchor="middle" fill="#64748b" font-size="10" font-weight="600">GPU/CPU Split</text>
+  <rect x="230" y="68" width="140" height="12" rx="4" fill="url(#vram)"/>
+  <text x="300" y="77" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">Attention + Some FFN</text>
+  <rect x="230" y="82" width="140" height="12" rx="4" fill="url(#ram)"/>
+  <text x="300" y="91" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">Remaining FFN</text>
+  <text x="300" y="108" text-anchor="middle" fill="#8b5cf6" font-size="8">Flexible</text>
+  <text x="300" y="120" text-anchor="middle" fill="#64748b" font-size="7">PCIe bottleneck</text>
+  
+  <!-- Strategy 3: MoE Expert-Offload -->
+  <text x="500" y="58" text-anchor="middle" fill="#64748b" font-size="10" font-weight="600">MoE Offload</text>
+  <rect x="430" y="68" width="140" height="12" rx="4" fill="url(#vram)"/>
+  <text x="500" y="77" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">Attention + Hot Experts</text>
+  <rect x="430" y="82" width="140" height="12" rx="4" fill="url(#ram)"/>
+  <text x="500" y="91" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">Cold Experts</text>
+  <text x="500" y="108" text-anchor="middle" fill="#f59e0b" font-size="8">2–3× faster</text>
+  <text x="500" y="120" text-anchor="middle" fill="#64748b" font-size="7">vs naive split</text>
+  
+  <!-- Strategy 4: Hot/Cold Neuron Split -->
+  <text x="700" y="58" text-anchor="middle" fill="#64748b" font-size="10" font-weight="600">Hot/Cold</text>
+  <rect x="630" y="68" width="140" height="12" rx="4" fill="url(#hot)"/>
+  <text x="700" y="77" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">Hot Neurons (GPU)</text>
+  <rect x="630" y="82" width="140" height="12" rx="4" fill="url(#cold)"/>
+  <text x="700" y="91" text-anchor="middle" fill="#fff" font-size="7" font-weight="600">Cold Neurons (CPU)</text>
+  <text x="700" y="108" text-anchor="middle" fill="#f59e0b" font-size="8">Sparse FFN</text>
+  <text x="700" y="120" text-anchor="middle" fill="#64748b" font-size="7">PowerInfer-style</text>
+  
+  <!-- Bottom: Layer Streaming -->
+  <rect x="30" y="145" width="740" height="55" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="400" y="165" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="600">Layer Streaming (Last Resort)</text>
+  
+  <!-- Layer stream visualization -->
+  <rect x="50" y="178" width="45" height="14" rx="3" fill="#334155"/>
+  <text x="72" y="188" text-anchor="middle" fill="#64748b" font-size="7">L1</text>
+  <rect x="100" y="178" width="45" height="14" rx="3" fill="#334155"/>
+  <text x="122" y="188" text-anchor="middle" fill="#64748b" font-size="7">L2</text>
+  <rect x="150" y="178" width="45" height="14" rx="3" fill="#334155"/>
+  <text x="172" y="188" text-anchor="middle" fill="#64748b" font-size="7">L3</text>
+  <text x="210" y="188" fill="#475569" font-size="8">···</text>
+  <rect x="230" y="178" width="45" height="14" rx="3" fill="#3b82f6"/>
+  <text x="252" y="188" text-anchor="middle" fill="#fff" font-size="7">L•</text>
+  <text x="290" y="188" fill="#475569" font-size="8">···</text>
+  <rect x="310" y="178" width="45" height="14" rx="3" fill="#334155"/>
+  <text x="332" y="188" text-anchor="middle" fill="#64748b" font-size="7">L79</text>
+  <rect x="360" y="178" width="45" height="14" rx="3" fill="#334155"/>
+  <text x="382" y="188" text-anchor="middle" fill="#64748b" font-size="7">L80</text>
+  
+  <text x="520" y="183" fill="#64748b" font-size="8">Load → Compute → Free → Next</text>
+  <text x="520" y="195" fill="#475569" font-size="7">~0.07 tok/s — technically possible, not practical for chat</text>
+  
+  <!-- Legend -->
+  <rect x="30" y="215" width="740" height="50" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="400" y="235" text-anchor="middle" fill="#64748b" font-size="9" font-weight="600">LEGEND</text>
+  
+  <rect x="100" y="245" width="12" height="12" rx="2" fill="url(#vram)"/>
+  <text x="120" y="255" fill="#94a3b8" font-size="8">GPU (VRAM)</text>
+  
+  <rect x="220" y="245" width="12" height="12" rx="2" fill="url(#ram)"/>
+  <text x="240" y="255" fill="#94a3b8" font-size="8">CPU (RAM)</text>
+  
+  <rect x="340" y="245" width="12" height="12" rx="2" fill="url(#hot)"/>
+  <text x="360" y="255" fill="#94a3b8" font-size="8">Hot Neurons</text>
+  
+  <rect x="470" y="245" width="12" height="12" rx="2" fill="url(#cold)"/>
+  <text x="490" y="255" fill="#94a3b8" font-size="8">Cold Neurons</text>
+  
+  <rect x="600" y="245" width="12" height="12" rx="2" fill="#334155" stroke="#475569" stroke-width="0.5"/>
+  <text x="620" y="255" fill="#94a3b8" font-size="8">Disk (NVMe)</text>
+</svg>
