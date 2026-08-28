@@ -144,6 +144,7 @@ set(SHARED_INCLUDE_DIRS
     src/recommend
     ${LLAMA_PATH}/include
     ${LLAMA_PATH}/ggml/include
+    ${LLAMA_PATH}/vendor/nlohmann
 )
 
 if(HAS_CUDA)

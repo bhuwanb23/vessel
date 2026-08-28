@@ -18,6 +18,8 @@
 #include "recommend/recommendation_engine.h"
 #include "platform/platform_factory.h"
 
+// Explicitly disable SSL - we only need plain HTTP for localhost
+#define CPPHTTPLIB_NO_OPENSSL
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 #undef CPPHTTPLIB_OPENSSL_SUPPORT
 #endif
