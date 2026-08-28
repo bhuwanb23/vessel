@@ -7,6 +7,7 @@
 #include "recommend/catalog_types.h"
 #include "recommend/catalog_loader.h"
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 
 static int tests_passed = 0;
