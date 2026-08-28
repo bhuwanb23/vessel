@@ -207,27 +207,6 @@ cd build/bin/Release  # or Debug
 
 ---
 
-## Architecture
-
-```
-vessel/
-├── src/
-│   ├── planner/          # Pipeline orchestration
-│   ├── profiler/         # Hardware profiling (GPU, RAM, disk)
-│   ├── predictor/        # Performance prediction
-│   ├── fetcher/          # GGUF metadata fetching
-│   ├── platform/         # Platform-specific code
-│   ├── recommend/        # Auto-recommendation engine
-│   ├── hotcold/          # Hot/cold neuron split
-│   └── moe/              # MoE expert-offload
-├── include/              # Headers
-├── data/                 # Model catalog
-├── docs/                 # Documentation + diagrams
-└── .github/              # CI/CD + issue templates
-```
-
----
-
 ## Calibration
 
 Vessel learns from every execution. After running a model, it logs actual performance and uses it to improve future predictions on the same hardware.
