@@ -9,7 +9,7 @@ on:
 
 env:
   BUILD_TYPE: Release
-  LLAMA_CPP_VERSION: b5550
+  LLAMA_CPP_VERSION: b9999
 
 jobs:
   # ===========================================================================
