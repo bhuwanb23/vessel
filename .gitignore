@@ -130,6 +130,7 @@ docs/_static/
 *.log
 logs/
 data/
+!data/models_catalog.json
 *.json
 !docs/*.json
 
