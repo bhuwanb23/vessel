@@ -763,10 +763,6 @@ static void setupRoutes(httplib::Server& server) {
     server.Get("/api/health", handleHealth);
     server.Get("/api/hardware", handleHardware);
     server.Get("/api/hardware/live", handleHardwareLive);
-    // Debug: test POST route registration
-    server.Post("/api/test-post", [](const httplib::Request& req, httplib::Response& res) {
-        sendJson(res, 200, makeSuccess({{"message", "POST works!"}}));
-    });
     server.Post("/api/predict", [](const httplib::Request& req, httplib::Response& res) {
         handlePredict(req, res);
     });
@@ -801,8 +797,13 @@ bool start_web_server(int port, const std::string&, bool open_browser_flag, cons
     g_server_port = port;
     httplib::Server server;
     setupRoutes(server);
-    server.set_error_handler([](const httplib::Request&, httplib::Response& res) {
-        sendJson(res, 404, makeError("NOT_FOUND", "Endpoint not found"));
+    server.set_error_handler([](const httplib::Request& req, httplib::Response& res) {
+        // Only override if the handler didn't already set a response body
+        // (httplib calls error handler for status >= 400, even if handler set it)
+        if (!res.body.empty()) return;  // Handler already wrote a response, don't overwrite
+        fprintf(stderr, "[vessel-web] Error %d for %s %s\n", res.status, req.method.c_str(), req.path.c_str());
+        if (res.status == 0) res.status = 500;
+        sendJson(res, res.status, makeError("NOT_FOUND", "Endpoint not found", req.method + " " + req.path));
     });
 
     // F1: Localhost-only binding by default
