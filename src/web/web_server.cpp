@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <unordered_map>
 #include <sstream>
+#include <memory>
 
 namespace fs = std::filesystem;
 
@@ -794,27 +795,67 @@ static void setupRoutes(httplib::Server& server) {
 // =============================================================================
 
 bool start_web_server(int port, const std::string&, bool open_browser_flag, const std::string& bind_address) {
-    g_server_port = port;
+    // F1: Localhost-only binding by default
+    if (bind_address == "0.0.0.0") {
+        printf("\n  WARNING: Binding to 0.0.0.0 - the dashboard is accessible from other machines on the network.\n");
+        printf("  For production use, consider adding authentication.\n");
+        printf("  Default (safer): bind to 127.0.0.1 (localhost only)\n\n");
+    }
+
+    // G1: Auto-port selection - try requested port, then scan 8080-8089
+    // We probe each port with a quick connect to detect if it's in use,
+    // because httplib's SO_REUSEPORT allows multiple binds to the same port.
+    auto is_port_available = [](const std::string& host, int p) -> bool {
+#ifdef _WIN32
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock == INVALID_SOCKET) return true;
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((u_short)p);
+        inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+        bool available = (connect(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR);
+        closesocket(sock);
+        return available;
+#else
+        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock < 0) return true;
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(p);
+        inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+        bool available = (connect(sock, (sockaddr*)&addr, sizeof(addr)) != 0);
+        close(sock);
+        return available;
+#endif
+    };
+
+    int actual_port = port;
+    const int port_max = 8090;
+    while (actual_port < port_max && !is_port_available(bind_address, actual_port)) {
+        actual_port++;
+    }
+    if (actual_port >= port_max) {
+        fprintf(stderr, "\n  ERROR: No available port in range %d-%d.\n", port, port_max - 1);
+        fprintf(stderr, "  Close other services using these ports and try again.\n\n");
+        return false;
+    }
+
     httplib::Server server;
     setupRoutes(server);
     server.set_error_handler([](const httplib::Request& req, httplib::Response& res) {
-        // Only override if the handler didn't already set a response body
-        // (httplib calls error handler for status >= 400, even if handler set it)
-        if (!res.body.empty()) return;  // Handler already wrote a response, don't overwrite
+        if (!res.body.empty()) return;
         fprintf(stderr, "[vessel-web] Error %d for %s %s\n", res.status, req.method.c_str(), req.path.c_str());
         if (res.status == 0) res.status = 500;
         sendJson(res, res.status, makeError("NOT_FOUND", "Endpoint not found", req.method + " " + req.path));
     });
 
-    // F1: Localhost-only binding by default
-    if (bind_address == "0.0.0.0") {
-        printf("\n  WARNING: Binding to 0.0.0.0 — the dashboard is accessible from other machines on the network.\n");
-        printf("  For production use, consider adding authentication.\n");
-        printf("  Default (safer): bind to 127.0.0.1 (localhost only)\n\n");
-    }
+    g_server_port = actual_port;
 
+    if (actual_port != port) {
+        printf("\n  Port %d is in use. Using port %d instead.\n", port, actual_port);
+    }
     printf("\n  Vessel Dashboard\n  http://%s:%d\n  Press Ctrl+C to stop\n\n",
-           bind_address.c_str(), port);
-    if (open_browser_flag) openBrowser("http://localhost:" + std::to_string(port));
-    return server.listen(bind_address.c_str(), port);
+           bind_address.c_str(), actual_port);
+    if (open_browser_flag) openBrowser("http://localhost:" + std::to_string(actual_port));
+    return server.listen(bind_address, actual_port);
 }

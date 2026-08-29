@@ -148,4 +148,18 @@ footer{display:flex;justify-content:space-between;padding:12px 24px;border-top:1
     .cards-grid{grid-template-columns:1fr}
     .input-row{flex-direction:column}
     .exec-stats{flex-wrap:wrap;gap:12px}
+    header{padding:10px 16px}
+    nav{padding:0 16px;overflow-x:auto}
+    main{padding:12px 16px}
+    footer{padding:10px 16px}
+    table{font-size:.75rem}
+    th,td{padding:6px 4px}
+}
+
+/* G4: HiDPI / Retina / 4K displays */
+@media(-webkit-min-device-pixel-ratio:2),(min-resolution:192dpi){
+    .gauge-bar{height:8px}
+    .bar-bg{height:20px}
+    .btn{min-height:36px}
+    .input-row input{min-height:36px}
 }
