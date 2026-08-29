@@ -37,14 +37,25 @@ static std::string json_escape(const std::string& s) {
 // =============================================================================
 
 static std::string get_timestamp_utc() {
+#if defined(_WIN32)
     SYSTEMTIME st_utc;
     GetSystemTime(&st_utc);
-
     char buf[64];
     snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
              st_utc.wYear, st_utc.wMonth, st_utc.wDay,
              st_utc.wHour, st_utc.wMinute, st_utc.wSecond);
     return std::string(buf);
+#else
+    // POSIX: use gmtime
+    auto now = std::time(nullptr);
+    struct tm utc;
+    gmtime_r(&now, &utc);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+             utc.tm_hour, utc.tm_min, utc.tm_sec);
+    return std::string(buf);
+#endif
 }
 
 // =============================================================================

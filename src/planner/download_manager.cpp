@@ -1,11 +1,19 @@
 #include "download_manager.h"
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <winhttp.h>
 #include <bcrypt.h>
 #include <shlobj.h>
+#pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "bcrypt.lib")
+#else
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -16,9 +24,7 @@
 #include <atomic>
 #include <mutex>
 
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "bcrypt.lib")
-
+#if defined(_WIN32)
 // =============================================================================
 // Helper: Convert string to wide string (for WinHTTP)
 // =============================================================================
@@ -1572,3 +1578,58 @@ PreDownloadCheck pre_download_check(const std::string& url,
 
     return result;
 }
+
+#else // Non-Windows stubs — download not yet supported on Linux/macOS
+
+#include <filesystem>
+namespace fs = std::filesystem;
+
+uint64_t get_file_size_via_head(const std::string&) { return 0; }
+uint64_t estimate_file_size_from_metadata(const ModelSpec& m) {
+    return (uint64_t)(m.param_count * 0.6); // rough estimate
+}
+uint64_t get_disk_free_bytes(const std::string& dir) {
+    std::error_code ec;
+    auto space = fs::space(dir, ec);
+    return ec ? 0 : space.available;
+}
+bool ensure_download_dir(const std::string& dir) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return !ec;
+}
+std::string get_default_download_dir() {
+    const char* home = getenv("HOME");
+    if (home) return std::string(home) + "/.cache/vessel/models";
+    return "./models";
+}
+std::string extract_filename_from_url(const std::string& url) {
+    auto pos = url.rfind('/');
+    return (pos != std::string::npos) ? url.substr(pos + 1) : url;
+}
+std::string find_smaller_quant_that_fits(uint64_t, const std::vector<ModelShardVariant>&, const std::string&) { return ""; }
+std::string url_to_api_url(const std::string& url) { return url; }
+std::string fetch_expected_sha256(const std::string&) { return ""; }
+std::string compute_file_sha256(const std::string&) { return ""; }
+std::string extract_repo_path(const std::string& url) { return url; }
+std::string get_repo_subdir_path(const std::string&, const std::string&) { return ""; }
+std::string get_partial_path(const std::string& url, const std::string& dir) {
+    return dir + "/" + extract_filename_from_url(url) + ".partial";
+}
+std::string get_final_path(const std::string& url, const std::string& dir) {
+    return dir + "/" + extract_filename_from_url(url);
+}
+uint64_t get_partial_file_size(const std::string& path) {
+    std::error_code ec;
+    auto sz = fs::file_size(path, ec);
+    return ec ? 0 : sz;
+}
+DownloadResult download_model_file(const std::string&, const std::string&, uint64_t,
+    std::atomic<bool>&, bool) {
+    DownloadResult r;
+    r.success = false;
+    r.error_message = "Download not yet supported on this platform. Use Windows build or CLI.";
+    return r;
+}
+
+#endif // _WIN32
