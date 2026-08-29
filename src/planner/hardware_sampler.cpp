@@ -1,42 +1,40 @@
 #include "hardware_sampler.h"
 #include "executor.h"
-#include <nvml.h>
-#include <windows.h>
 #include <csignal>
 #include <cstdio>
 #include <chrono>
 #include <algorithm>
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <nvml.h>
+#endif
+
 // =============================================================================
-// NVML State
+// NVML State (NVIDIA only, not available on macOS)
 // =============================================================================
 
+#if defined(_WIN32)
 static bool nvml_initialized = false;
 static nvmlDevice_t nvml_device = nullptr;
 
-// Initialize NVML (call once)
 static void ensure_nvml() {
     if (nvml_initialized) return;
-
     nvmlReturn_t ret = nvmlInit();
     if (ret == NVML_SUCCESS) {
         nvml_initialized = true;
         unsigned int device_count = 0;
         nvmlDeviceGetCount(&device_count);
-        if (device_count > 0) {
-            nvmlDeviceGetHandleByIndex(0, &nvml_device);
-        }
+        if (device_count > 0) nvmlDeviceGetHandleByIndex(0, &nvml_device);
     }
 }
-
-// Shutdown NVML (call at program exit)
 static void shutdown_nvml() {
-    if (nvml_initialized) {
-        nvmlShutdown();
-        nvml_initialized = false;
-        nvml_device = nullptr;
-    }
+    if (nvml_initialized) { nvmlShutdown(); nvml_initialized = false; nvml_device = nullptr; }
 }
+#else
+static void ensure_nvml() {}
+static void shutdown_nvml() {}
+#endif
 
 // =============================================================================
 // HardwareSampler
@@ -132,38 +130,29 @@ void HardwareSampler::poll_loop() {
         sample.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()).count();
 
-        // Sample GPU via NVML
         bool nvml_ok = false;
+#if defined(_WIN32)
+        // Sample GPU via NVML (NVIDIA only)
         if (nvml_initialized && nvml_device) {
-            // VRAM usage
             nvmlMemory_t mem;
             if (nvmlDeviceGetMemoryInfo(nvml_device, &mem) == NVML_SUCCESS) {
                 sample.vram_used_bytes = mem.used;
                 nvml_ok = true;
             }
-
-            // Temperature
             unsigned int temp = 0;
-            if (nvmlDeviceGetTemperature(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
+            if (nvmlDeviceGetTemperature(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS)
                 sample.gpu_temp_celsius = temp;
-            }
-
-            // Clock speed (for throttle detection)
             unsigned int clock = 0;
-            if (nvmlDeviceGetClockInfo(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS) {
+            if (nvmlDeviceGetClockInfo(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS)
                 sample.gpu_clock_mhz = clock;
-            }
-
-            // PCIe throughput (Step 9, Phase E — MoE expert streaming)
             unsigned int pcie_rx = 0;
-            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS) {
-                sample.pcie_rx_mbs = pcie_rx / (1024 * 1024);  // Convert to MB/s
-            }
+            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS)
+                sample.pcie_rx_mbs = pcie_rx / (1024 * 1024);
             unsigned int pcie_tx = 0;
-            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS) {
-                sample.pcie_tx_mbs = pcie_tx / (1024 * 1024);  // Convert to MB/s
-            }
+            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS)
+                sample.pcie_tx_mbs = pcie_tx / (1024 * 1024);
         }
+#endif
 
         // GPU bus-off detection: if NVML query failed after previously succeeding
         if (!nvml_ok && !nvml_failed_ && samples_.size() > 2) {

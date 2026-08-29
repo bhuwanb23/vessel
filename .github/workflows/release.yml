@@ -35,15 +35,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: llama.cpp/build
-          key: llama-win-cuda-${{ env.LLAMA_CPP_VERSION }}-${{ hashFiles('.github/workflows/release.yml') }}
-          restore-keys: llama-win-cuda-
+          key: llama-win-cpu-${{ env.LLAMA_CPP_VERSION }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: llama-win-cpu-
 
-      - name: Build llama.cpp (CUDA)
+      - name: Build llama.cpp (CPU)
         shell: bash
         run: |
           cd llama.cpp
-          if [ ! -f "build/bin/Release/llama.dll" ] && [ ! -f "build/bin/Release/ggml-cuda.dll" ]; then
-            cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+          if [ ! -f "build/bin/Release/llama.dll" ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
             cmake --build build --config Release -j%NUMBER_OF_PROCESSORS%
           else
             echo "llama.cpp already built, skipping"
@@ -52,7 +52,7 @@ jobs:
       - name: Build vessel
         shell: bash
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release -j%NUMBER_OF_PROCESSORS%
 
       - name: Package
