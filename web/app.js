@@ -342,32 +342,86 @@ async function resetCalibration() {
 // =========================================================================
 let execSSE = null;
 
-function openExecModal(config) {
+async function openExecModal(config) {
     document.getElementById('exec-modal').classList.remove('hidden');
-    document.getElementById('exec-output').textContent = '';
+    document.getElementById('exec-output').textContent = 'Starting execution...\n';
     document.getElementById('exec-tps').textContent = '--';
     document.getElementById('exec-vram').textContent = '--';
     document.getElementById('exec-temp').textContent = '--';
-    document.getElementById('exec-tokens').textContent = '0/0';
+    document.getElementById('exec-tokens').textContent = '0';
     document.getElementById('exec-progress').style.width = '0%';
     document.getElementById('btn-abort').classList.remove('hidden');
     document.getElementById('btn-close-exec').classList.add('hidden');
 
-    // For now, show that execution requires CLI
-    document.getElementById('exec-output').textContent =
-        'Execution via the dashboard will be available in a future update.\n\n' +
-        'For now, use the CLI:\n' +
-        '  vessel --model <url> --execute\n\n' +
-        `Strategy: ${config.placement}\n` +
-        `GPU Layers: ${config.gpu_layers}\n` +
-        `Context: ${config.context}\n` +
-        `KV Cache: ${config.kv === 16 ? 'FP16' : 'Q8'}\n`;
+    const output = document.getElementById('exec-output');
+    const totalTokens = config.max_tokens || 200;
+    let tokensGenerated = 0;
 
-    // Close immediately since we can't execute yet
-    setTimeout(() => {
+    try {
+        const result = await api.post('/api/execute', {
+            model_path: config.model_path,
+            prompt: config.prompt || 'Hello, how are you?',
+            max_tokens: totalTokens
+        });
+        const streamUrl = result.stream_url;
+        if (!streamUrl) throw new Error('No stream URL returned');
+
+        output.textContent += 'Connected to execution stream...\n';
+        execSSE = new EventSource(streamUrl);
+
+        execSSE.addEventListener('loading', e => {
+            const d = JSON.parse(e.data);
+            output.textContent += d.message + '\n';
+        });
+        execSSE.addEventListener('loaded', e => {
+            const d = JSON.parse(e.data);
+            const vramGB = (d.vram_used_bytes / 1e9).toFixed(1);
+            document.getElementById('exec-vram').textContent = vramGB + ' GB';
+            output.textContent += `Model loaded (${(d.load_time_ms/1000).toFixed(1)}s)\n`;
+        });
+        execSSE.addEventListener('prefill', e => {
+            const d = JSON.parse(e.data);
+            output.textContent += `Prefill: ${d.ttft_ms}ms for ${d.prompt_tokens} tokens\n`;
+        });
+        execSSE.addEventListener('token', e => {
+            const d = JSON.parse(e.data);
+            output.textContent += d.token;
+            tokensGenerated = d.tokens_generated;
+            document.getElementById('exec-tokens').textContent = `${tokensGenerated}/${totalTokens}`;
+            document.getElementById('exec-tps').textContent = d.current_tok_per_sec.toFixed(0);
+            document.getElementById('exec-progress').style.width = `${Math.min(100, (tokensGenerated/totalTokens)*100)}%`;
+            output.scrollTop = output.scrollHeight;
+        });
+        execSSE.addEventListener('hardware_sample', e => {
+            const d = JSON.parse(e.data);
+            document.getElementById('exec-vram').textContent = (d.vram_used_bytes / 1e9).toFixed(1) + ' GB';
+            if (d.gpu_temp_celsius > 0) document.getElementById('exec-temp').textContent = d.gpu_temp_celsius + '\u00b0C';
+        });
+        execSSE.addEventListener('status', e => {
+            const d = JSON.parse(e.data);
+            output.textContent += '\n' + d.message + '\n';
+            if (d.cli_command) output.textContent += `\nRun: ${d.cli_command}\n`;
+        });
+        execSSE.addEventListener('complete', e => {
+            const d = JSON.parse(e.data);
+            if (d.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${d.actual_tokens_per_sec.toFixed(1)} tok/s`;
+            if (d.actual_ttft_ms) output.textContent += ` | TTFT: ${d.actual_ttft_ms}ms`;
+            if (d.throttled) output.textContent += ' | THROTTLED';
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+            execSSE.close(); execSSE = null;
+        });
+        execSSE.addEventListener('error', e => {
+            output.textContent += '\n[Connection lost]\n';
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+            if (execSSE) { execSSE.close(); execSSE = null; }
+        });
+    } catch(err) {
+        output.textContent += `\nError: ${err.message}\n`;
         document.getElementById('btn-abort').classList.add('hidden');
         document.getElementById('btn-close-exec').classList.remove('hidden');
-    }, 500);
+    }
 }
 
 function closeExecModal() {

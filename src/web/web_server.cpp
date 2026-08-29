@@ -678,11 +678,16 @@ static void handleExecuteStream(const httplib::Request& req, httplib::Response& 
     if (!task) {
         sendJson(res, 404, makeError("TASK_NOT_FOUND", "No task with this ID"));
         return;
-    }
-    sendSSEHeader(res);
+    }    sendSSEHeader(res);
     res.set_chunked_content_provider("text/event-stream",
         [task](size_t, httplib::DataSink& sink) -> bool {
+            auto last_keepalive = std::chrono::steady_clock::now();
             while (task->running || !task->event_queue.empty()) {
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_keepalive).count() >= 15) {
+                    last_keepalive = now;
+                    if (!sink.write(SSE_KEEPALIVE, strlen(SSE_KEEPALIVE))) return false;
+                }
                 std::string event;
                 if (task->waitForEvent(event, 1000)) {
                     if (!sink.write(event.c_str(), event.size())) return false;
@@ -692,6 +697,9 @@ static void handleExecuteStream(const httplib::Request& req, httplib::Response& 
             return true;
         });
 }
+
+
+
 
 static void handleExecuteAbort(const httplib::Request& req, httplib::Response& res) {
     std::string task_id;
