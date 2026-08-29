@@ -1607,7 +1607,7 @@ std::string extract_filename_from_url(const std::string& url) {
     auto pos = url.rfind('/');
     return (pos != std::string::npos) ? url.substr(pos + 1) : url;
 }
-std::string find_smaller_quant_that_fits(uint64_t, const std::vector<ModelShardVariant>&, const std::string&) { return ""; }
+std::string find_smaller_quant_that_fits(uint64_t, const ModelSpec&) { return ""; }
 std::string url_to_api_url(const std::string& url) { return url; }
 std::string fetch_expected_sha256(const std::string&) { return ""; }
 std::string compute_file_sha256(const std::string&) { return ""; }

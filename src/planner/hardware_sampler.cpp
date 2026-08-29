@@ -7,7 +7,33 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <nvml.h>
+// NVML loaded dynamically at runtime — no nvml.lib required at link time.
+// NVML is always present on machines with NVIDIA drivers.
+typedef int nvmlReturn_t;
+typedef void* nvmlDevice_t;
+typedef struct { unsigned long long total; unsigned long long free; unsigned long long used; } nvmlMemory_t;
+static const int NVML_SUCCESS = 0;
+static const int NVML_TEMPERATURE_GPU = 0;
+static const int NVML_CLOCK_SM = 0;
+static const int NVML_PCIE_UTIL_RX_BYTES = 1;
+static const int NVML_PCIE_UTIL_TX_BYTES = 2;
+typedef nvmlReturn_t (*pfn_nvmlInit)(void);
+typedef nvmlReturn_t (*pfn_nvmlShutdown)(void);
+typedef nvmlReturn_t (*pfn_nvmlDeviceGetCount)(unsigned int*);
+typedef nvmlReturn_t (*pfn_nvmlDeviceGetHandleByIndex)(unsigned int, nvmlDevice_t*);
+typedef nvmlReturn_t (*pfn_nvmlDeviceGetMemoryInfo)(nvmlDevice_t, nvmlMemory_t*);
+typedef nvmlReturn_t (*pfn_nvmlDeviceGetTemperature)(nvmlDevice_t, unsigned int, unsigned int*);
+typedef nvmlReturn_t (*pfn_nvmlDeviceGetClockInfo)(nvmlDevice_t, unsigned int, unsigned int*);
+typedef nvmlReturn_t (*pfn_nvmlDeviceGetPcieThroughput)(nvmlDevice_t, unsigned int, unsigned int*);
+static HMODULE nvml_dll = nullptr;
+static pfn_nvmlInit nvmlInit_fn = nullptr;
+static pfn_nvmlShutdown nvmlShutdown_fn = nullptr;
+static pfn_nvmlDeviceGetCount nvmlDeviceGetCount_fn = nullptr;
+static pfn_nvmlDeviceGetHandleByIndex nvmlDeviceGetHandleByIndex_fn = nullptr;
+static pfn_nvmlDeviceGetMemoryInfo nvmlDeviceGetMemoryInfo_fn = nullptr;
+static pfn_nvmlDeviceGetTemperature nvmlDeviceGetTemperature_fn = nullptr;
+static pfn_nvmlDeviceGetClockInfo nvmlDeviceGetClockInfo_fn = nullptr;
+static pfn_nvmlDeviceGetPcieThroughput nvmlDeviceGetPcieThroughput_fn = nullptr;
 #elif defined(__APPLE__)
 #include <sys/sysctl.h>
 #endif
@@ -22,16 +48,38 @@ static nvmlDevice_t nvml_device = nullptr;
 
 static void ensure_nvml() {
     if (nvml_initialized) return;
-    nvmlReturn_t ret = nvmlInit();
+    // Load nvml.dll from the NVIDIA driver installation
+    nvml_dll = LoadLibraryA("nvml.dll");
+    if (!nvml_dll) return;
+    nvmlInit_fn = (pfn_nvmlInit)GetProcAddress(nvml_dll, "nvmlInit_v2");
+    if (!nvmlInit_fn) nvmlInit_fn = (pfn_nvmlInit)GetProcAddress(nvml_dll, "nvmlInit");
+    nvmlShutdown_fn = (pfn_nvmlShutdown)GetProcAddress(nvml_dll, "nvmlShutdown");
+    nvmlDeviceGetCount_fn = (pfn_nvmlDeviceGetCount)GetProcAddress(nvml_dll, "nvmlDeviceGetCount");
+    nvmlDeviceGetHandleByIndex_fn = (pfn_nvmlDeviceGetHandleByIndex)GetProcAddress(nvml_dll, "nvmlDeviceGetHandleByIndex_v2");
+    if (!nvmlDeviceGetHandleByIndex_fn) nvmlDeviceGetHandleByIndex_fn = (pfn_nvmlDeviceGetHandleByIndex)GetProcAddress(nvml_dll, "nvmlDeviceGetHandleByIndex");
+    nvmlDeviceGetMemoryInfo_fn = (pfn_nvmlDeviceGetMemoryInfo)GetProcAddress(nvml_dll, "nvmlDeviceGetMemoryInfo");
+    nvmlDeviceGetTemperature_fn = (pfn_nvmlDeviceGetTemperature)GetProcAddress(nvml_dll, "nvmlDeviceGetTemperature");
+    nvmlDeviceGetClockInfo_fn = (pfn_nvmlDeviceGetClockInfo)GetProcAddress(nvml_dll, "nvmlDeviceGetClockInfo");
+    nvmlDeviceGetPcieThroughput_fn = (pfn_nvmlDeviceGetPcieThroughput)GetProcAddress(nvml_dll, "nvmlDeviceGetPcieThroughput");
+    if (!nvmlInit_fn || !nvmlDeviceGetCount_fn || !nvmlDeviceGetHandleByIndex_fn ||
+        !nvmlDeviceGetMemoryInfo_fn || !nvmlDeviceGetTemperature_fn ||
+        !nvmlDeviceGetClockInfo_fn || !nvmlDeviceGetPcieThroughput_fn) {
+        // Not all symbols found — don't use NVML
+        FreeLibrary(nvml_dll);
+        nvml_dll = nullptr;
+        return;
+    }
+    nvmlReturn_t ret = nvmlInit_fn();
     if (ret == NVML_SUCCESS) {
         nvml_initialized = true;
         unsigned int device_count = 0;
-        nvmlDeviceGetCount(&device_count);
-        if (device_count > 0) nvmlDeviceGetHandleByIndex(0, &nvml_device);
+        nvmlDeviceGetCount_fn(&device_count);
+        if (device_count > 0) nvmlDeviceGetHandleByIndex_fn(0, &nvml_device);
     }
 }
 static void shutdown_nvml() {
-    if (nvml_initialized) { nvmlShutdown(); nvml_initialized = false; nvml_device = nullptr; }
+    if (nvml_initialized && nvmlShutdown_fn) { nvmlShutdown_fn(); nvml_initialized = false; nvml_device = nullptr; }
+    if (nvml_dll) { FreeLibrary(nvml_dll); nvml_dll = nullptr; }
 }
 #else
 static void ensure_nvml() {}
@@ -134,24 +182,24 @@ void HardwareSampler::poll_loop() {
 
         bool nvml_ok = false;
 #if defined(_WIN32)
-        // Sample GPU via NVML (NVIDIA only)
-        if (nvml_initialized && nvml_device) {
+        // Sample GPU via NVML (NVIDIA only, dynamically loaded)
+        if (nvml_initialized && nvml_device && nvmlDeviceGetMemoryInfo_fn) {
             nvmlMemory_t mem;
-            if (nvmlDeviceGetMemoryInfo(nvml_device, &mem) == NVML_SUCCESS) {
+            if (nvmlDeviceGetMemoryInfo_fn(nvml_device, &mem) == NVML_SUCCESS) {
                 sample.vram_used_bytes = mem.used;
                 nvml_ok = true;
             }
             unsigned int temp = 0;
-            if (nvmlDeviceGetTemperature(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS)
+            if (nvmlDeviceGetTemperature_fn && nvmlDeviceGetTemperature_fn(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS)
                 sample.gpu_temp_celsius = temp;
             unsigned int clock = 0;
-            if (nvmlDeviceGetClockInfo(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS)
+            if (nvmlDeviceGetClockInfo_fn && nvmlDeviceGetClockInfo_fn(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS)
                 sample.gpu_clock_mhz = clock;
             unsigned int pcie_rx = 0;
-            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS)
+            if (nvmlDeviceGetPcieThroughput_fn && nvmlDeviceGetPcieThroughput_fn(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS)
                 sample.pcie_rx_mbs = pcie_rx / (1024 * 1024);
             unsigned int pcie_tx = 0;
-            if (nvmlDeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS)
+            if (nvmlDeviceGetPcieThroughput_fn && nvmlDeviceGetPcieThroughput_fn(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS)
                 sample.pcie_tx_mbs = pcie_tx / (1024 * 1024);
         }
 #endif
