@@ -134,23 +134,23 @@ void HardwareSampler::poll_loop() {
         bool nvml_ok = false;
 #if defined(_WIN32)
         // Sample GPU via NVML (NVIDIA only, dynamically loaded)
-        if (nvml_initialized && nvml_device && nvmlDeviceGetMemoryInfo_fn) {
+        if (nvml_initialized && nvml_device && nvml_fn_DeviceGetMemoryInfo) {
             nvmlMemory_t mem;
-            if (nvmlDeviceGetMemoryInfo_fn(nvml_device, &mem) == NVML_SUCCESS) {
+            if (nvml_fn_DeviceGetMemoryInfo && nvml_fn_DeviceGetMemoryInfo(nvml_device, &mem) == NVML_SUCCESS) {
                 sample.vram_used_bytes = mem.used;
                 nvml_ok = true;
             }
             unsigned int temp = 0;
-            if (nvmlDeviceGetTemperature_fn && nvmlDeviceGetTemperature_fn(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS)
+            if (nvml_fn_DeviceGetTemperature && nvml_fn_DeviceGetTemperature(nvml_device, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS)
                 sample.gpu_temp_celsius = temp;
             unsigned int clock = 0;
-            if (nvmlDeviceGetClockInfo_fn && nvmlDeviceGetClockInfo_fn(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS)
+            if (nvml_fn_DeviceGetClockInfo && nvml_fn_DeviceGetClockInfo(nvml_device, NVML_CLOCK_SM, &clock) == NVML_SUCCESS)
                 sample.gpu_clock_mhz = clock;
             unsigned int pcie_rx = 0;
-            if (nvmlDeviceGetPcieThroughput_fn && nvmlDeviceGetPcieThroughput_fn(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS)
+            if (nvml_fn_DeviceGetPcieThroughput && nvml_fn_DeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_RX_BYTES, &pcie_rx) == NVML_SUCCESS)
                 sample.pcie_rx_mbs = pcie_rx / (1024 * 1024);
             unsigned int pcie_tx = 0;
-            if (nvmlDeviceGetPcieThroughput_fn && nvmlDeviceGetPcieThroughput_fn(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS)
+            if (nvml_fn_DeviceGetPcieThroughput && nvml_fn_DeviceGetPcieThroughput(nvml_device, NVML_PCIE_UTIL_TX_BYTES, &pcie_tx) == NVML_SUCCESS)
                 sample.pcie_tx_mbs = pcie_tx / (1024 * 1024);
         }
 #endif
