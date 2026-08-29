@@ -44,7 +44,7 @@ jobs:
           cd llama.cpp
           if [ ! -f "build/bin/Release/llama.dll" ]; then
             cmake -B build -DCMAKE_BUILD_TYPE=Release
-            cmake --build build --config Release -j%NUMBER_OF_PROCESSORS%
+            cmake --build build --config Release -j$(nproc 2>/dev/null || echo 4)
           else
             echo "llama.cpp already built, skipping"
           fi
@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release -j%NUMBER_OF_PROCESSORS%
+          cmake --build build --config Release -j$(nproc 2>/dev/null || echo 4)
 
       - name: Package
         shell: bash

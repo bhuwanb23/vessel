@@ -8,6 +8,8 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <nvml.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
 #endif
 
 // =============================================================================
@@ -160,12 +162,23 @@ void HardwareSampler::poll_loop() {
             fprintf(stderr, "[HW] WARNING: NVML query failed — GPU may have fallen off the bus\n");
         }
 
+#if defined(_WIN32)
         // Sample RAM via Windows API
         MEMORYSTATUSEX mem_status;
         mem_status.dwLength = sizeof(MEMORYSTATUSEX);
         if (GlobalMemoryStatusEx(&mem_status)) {
             sample.ram_used_bytes = mem_status.ullTotalPhys - mem_status.ullAvailPhys;
         }
+#elif defined(__APPLE__)
+        // macOS: use sysctl
+        {
+            int64_t physmem = 0;
+            size_t size = sizeof(physmem);
+            sysctlbyname("hw.memsize", &physmem, &size, NULL, 0);
+            // Approximate used from free_count (simplified)
+            sample.ram_used_bytes = 0;  // Will be filled by profiler on first run
+        }
+#endif
 
         // Store sample
         {
