@@ -1,8 +1,8 @@
 #include "platform/hardware_profiler_interface.h"
+#include "nvml_loader.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <nvml.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -21,26 +21,31 @@
 class NvidiaProfiler : public IHardwareProfiler {
 public:
     NvidiaProfiler() : initialized_(false) {
+        // Dynamically load NVML
+        if (!nvml_loader_init()) {
+            fprintf(stderr, "[NvidiaProfiler] NVML not available\n");
+            return;
+        }
         // Try to initialize NVML
-        nvmlReturn_t result = nvmlInit();
+        nvmlReturn_t result = nvml_fn_Init();
         if (result == NVML_SUCCESS) {
             initialized_ = true;
             // Get device handle
-            result = nvmlDeviceGetHandleByIndex(0, &device_);
+            result = nvml_fn_DeviceGetHandleByIndex(0, &device_);
             if (result != NVML_SUCCESS) {
                 fprintf(stderr, "[NvidiaProfiler] Failed to get device handle: %s\n",
-                        nvmlErrorString(result));
+                        nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
                 initialized_ = false;
             }
         } else {
             fprintf(stderr, "[NvidiaProfiler] NVML initialization failed: %s\n",
-                    nvmlErrorString(result));
+                    nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
         }
     }
     
     ~NvidiaProfiler() override {
-        if (initialized_) {
-            nvmlShutdown();
+        if (initialized_ && nvml_fn_Shutdown) {
+            nvml_fn_Shutdown();
         }
     }
     
@@ -76,13 +81,13 @@ public:
         
         // GPU info
         char name[NVML_DEVICE_NAME_V2_BUFFER_SIZE];
-        if (nvmlDeviceGetName(device_, name, sizeof(name)) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetName && nvml_fn_DeviceGetName(device_, name, sizeof(name)) == NVML_SUCCESS) {
             spec.gpu_name = name;
         }
         
         // Compute capability
         int major, minor;
-        if (nvmlDeviceGetCudaComputeCapability(device_, &major, &minor) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetCudaComputeCapability && nvml_fn_DeviceGetCudaComputeCapability(device_, &major, &minor) == NVML_SUCCESS) {
             spec.gpu_compute_major = major;
             spec.gpu_compute_minor = minor;
             spec.compute_capability = "sm_" + std::to_string(major) + std::to_string(minor);
@@ -90,32 +95,32 @@ public:
         
         // VRAM
         nvmlMemory_t mem;
-        if (nvmlDeviceGetMemoryInfo(device_, &mem) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetMemoryInfo && nvml_fn_DeviceGetMemoryInfo(device_, &mem) == NVML_SUCCESS) {
             spec.vram_total_bytes = mem.total;
             spec.vram_free_bytes = mem.free;
         }
         
         // GPU temperature
         unsigned int temp;
-        if (nvmlDeviceGetTemperature(device_, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetTemperature && nvml_fn_DeviceGetTemperature(device_, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
             spec.gpu_temp_celsius = temp;
         }
         
         // GPU clock
         unsigned int clock;
-        if (nvmlDeviceGetClockInfo(device_, NVML_CLOCK_SM, &clock) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetClockInfo && nvml_fn_DeviceGetClockInfo(device_, NVML_CLOCK_SM, &clock) == NVML_SUCCESS) {
             spec.gpu_clock_mhz = clock;
         }
         
         // GPU utilization
         nvmlUtilization_t util;
-        if (nvmlDeviceGetUtilizationRates(device_, &util) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetUtilizationRates && nvml_fn_DeviceGetUtilizationRates(device_, &util) == NVML_SUCCESS) {
             spec.gpu_utilization = util.gpu;
         }
         
         // GPU count
         unsigned int count;
-        if (nvmlDeviceGetCount(&count) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetCount && nvml_fn_DeviceGetCount(&count) == NVML_SUCCESS) {
             spec.gpu_count = count;
         }
         
@@ -144,7 +149,7 @@ public:
         } else {
             // Unknown GPU: derive from memory clock + bus width
             unsigned int mem_clock_mhz = 0;
-            if (nvmlDeviceGetMaxClockInfo(device_, NVML_CLOCK_MEM, &mem_clock_mhz) != NVML_SUCCESS)
+            if (nvml_fn_DeviceGetMaxClockInfo && nvml_fn_DeviceGetMaxClockInfo(device_, NVML_CLOCK_MEM, &mem_clock_mhz) != NVML_SUCCESS)
                 mem_clock_mhz = 0;
             int bus_width = lookup_int(BUS_WIDTH_TABLE, spec.gpu_name, 0);
             if (bus_width > 0 && mem_clock_mhz > 0) {
@@ -167,7 +172,7 @@ public:
     uint64_t getFreeVRAM() const override {
         if (!initialized_) return 0;
         nvmlMemory_t mem;
-        if (nvmlDeviceGetMemoryInfo(device_, &mem) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetMemoryInfo && nvml_fn_DeviceGetMemoryInfo(device_, &mem) == NVML_SUCCESS) {
             return mem.free;
         }
         return 0;
@@ -176,7 +181,7 @@ public:
     uint32_t getGPUTemp() const override {
         if (!initialized_) return 0;
         unsigned int temp;
-        if (nvmlDeviceGetTemperature(device_, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetTemperature && nvml_fn_DeviceGetTemperature(device_, NVML_TEMPERATURE_GPU, &temp) == NVML_SUCCESS) {
             return temp;
         }
         return 0;
@@ -185,7 +190,7 @@ public:
     uint32_t getGPUClock() const override {
         if (!initialized_) return 0;
         unsigned int clock;
-        if (nvmlDeviceGetClockInfo(device_, NVML_CLOCK_SM, &clock) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetClockInfo && nvml_fn_DeviceGetClockInfo(device_, NVML_CLOCK_SM, &clock) == NVML_SUCCESS) {
             return clock;
         }
         return 0;
@@ -194,7 +199,7 @@ public:
     uint32_t getGPUUtilization() const override {
         if (!initialized_) return 0;
         nvmlUtilization_t util;
-        if (nvmlDeviceGetUtilizationRates(device_, &util) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetUtilizationRates && nvml_fn_DeviceGetUtilizationRates(device_, &util) == NVML_SUCCESS) {
             return util.gpu;
         }
         return 0;
@@ -211,7 +216,7 @@ public:
     uint32_t getGPUCount() const override {
         if (!initialized_) return 1;
         unsigned int count;
-        if (nvmlDeviceGetCount(&count) == NVML_SUCCESS) {
+        if (nvml_fn_DeviceGetCount && nvml_fn_DeviceGetCount(&count) == NVML_SUCCESS) {
             return count;
         }
         return 1;

@@ -1,6 +1,6 @@
 #include "gpu_profiler.h"
 
-#include <nvml.h>
+#include "nvml_loader.h"
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -94,17 +94,16 @@ static double lookup_fallback_bandwidth(const std::string& gpu_name) {
 std::vector<GpuProfile> profile_gpus() {
     std::vector<GpuProfile> profiles;
 
-    nvmlReturn_t result = nvmlInit();
-    if (result != NVML_SUCCESS) {
-        fprintf(stderr, "Error: nvmlInit() failed: %s\n", nvmlErrorString(result));
+    if (!nvml_loader_init()) {
+        fprintf(stderr, "[GPU] NVML not available — GPU profiling disabled\n");
         return profiles;
     }
 
     unsigned int device_count = 0;
-    result = nvmlDeviceGetCount(&device_count);
+    nvmlReturn_t result = nvml_fn_DeviceGetCount(&device_count);
     if (result != NVML_SUCCESS) {
-        fprintf(stderr, "Error: nvmlDeviceGetCount() failed: %s\n", nvmlErrorString(result));
-        nvmlShutdown();
+        fprintf(stderr, "Error: nvmlDeviceGetCount() failed: %s\n",
+                nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
         return profiles;
     }
 
@@ -113,25 +112,27 @@ std::vector<GpuProfile> profile_gpus() {
         profile.device_index = static_cast<int>(i);
 
         nvmlDevice_t device;
-        result = nvmlDeviceGetHandleByIndex(i, &device);
+        result = nvml_fn_DeviceGetHandleByIndex(i, &device);
         if (result != NVML_SUCCESS) {
-            fprintf(stderr, "Error: nvmlDeviceGetHandleByIndex(%u) failed: %s\n", i, nvmlErrorString(result));
+            fprintf(stderr, "Error: nvmlDeviceGetHandleByIndex(%u) failed: %s\n", i,
+                    nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
             continue;
         }
 
         // GPU name
         char name[NVML_DEVICE_NAME_V2_BUFFER_SIZE];
-        result = nvmlDeviceGetName(device, name, sizeof(name));
+        result = nvml_fn_DeviceGetName(device, name, sizeof(name));
         if (result == NVML_SUCCESS) {
             profile.name = name;
         } else {
             profile.name = "Unknown GPU";
-            fprintf(stderr, "Warning: nvmlDeviceGetName() failed: %s\n", nvmlErrorString(result));
+            fprintf(stderr, "Warning: nvmlDeviceGetName() failed: %s\n",
+                    nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
         }
 
         // VRAM
         nvmlMemory_t memory;
-        result = nvmlDeviceGetMemoryInfo(device, &memory);
+        result = nvml_fn_DeviceGetMemoryInfo(device, &memory);
         if (result == NVML_SUCCESS) {
             profile.vram_total_bytes = memory.total;
             profile.vram_free_bytes = memory.free;
@@ -139,16 +140,18 @@ std::vector<GpuProfile> profile_gpus() {
             profile.vram_total_gb = static_cast<double>(memory.total) / (1024.0 * 1024.0 * 1024.0);
             profile.vram_free_gb = static_cast<double>(memory.free) / (1024.0 * 1024.0 * 1024.0);
         } else {
-            fprintf(stderr, "Warning: nvmlDeviceGetMemoryInfo() failed: %s\n", nvmlErrorString(result));
+            fprintf(stderr, "Warning: nvmlDeviceGetMemoryInfo() failed: %s\n",
+                    nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
         }
 
         // Memory clock speed
         unsigned int clock_mhz = 0;
-        result = nvmlDeviceGetMaxClockInfo(device, NVML_CLOCK_MEM, &clock_mhz);
+        result = nvml_fn_DeviceGetMaxClockInfo(device, NVML_CLOCK_MEM, &clock_mhz);
         if (result == NVML_SUCCESS) {
             profile.memory_clock_mhz = static_cast<int>(clock_mhz);
         } else {
-            fprintf(stderr, "Warning: nvmlDeviceGetMaxClockInfo() failed: %s\n", nvmlErrorString(result));
+            fprintf(stderr, "Warning: nvmlDeviceGetMaxClockInfo() failed: %s\n",
+                    nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
         }
 
         // Bus width from lookup table
@@ -181,27 +184,26 @@ std::vector<GpuProfile> profile_gpus() {
 
         // Temperature
         unsigned int temp_c = 0;
-        result = nvmlDeviceGetTemperature(device, NVML_TEMPERATURE_GPU, &temp_c);
+        result = nvml_fn_DeviceGetTemperature ? nvml_fn_DeviceGetTemperature(device, NVML_TEMPERATURE_GPU, &temp_c) : NVML_SUCCESS;
         if (result == NVML_SUCCESS) {
             profile.temperature_c = static_cast<int>(temp_c);
-        } else {
-            fprintf(stderr, "Warning: nvmlDeviceGetTemperature() failed: %s\n", nvmlErrorString(result));
+        } else if (nvml_fn_ErrorString) {
+            fprintf(stderr, "Warning: nvmlDeviceGetTemperature() failed: %s\n", nvml_fn_ErrorString(result));
         }
 
         // Compute capability
         int major = 0, minor = 0;
-        result = nvmlDeviceGetCudaComputeCapability(device, &major, &minor);
+        result = nvml_fn_DeviceGetCudaComputeCapability ? nvml_fn_DeviceGetCudaComputeCapability(device, &major, &minor) : NVML_SUCCESS;
         if (result == NVML_SUCCESS) {
             profile.compute_capability_major = major;
             profile.compute_capability_minor = minor;
-        } else {
-            fprintf(stderr, "Warning: nvmlDeviceGetCudaComputeCapability() failed: %s\n", nvmlErrorString(result));
+        } else if (nvml_fn_ErrorString) {
+            fprintf(stderr, "Warning: nvmlDeviceGetCudaComputeCapability() failed: %s\n", nvml_fn_ErrorString(result));
         }
 
         profiles.push_back(profile);
     }
 
-    nvmlShutdown();
     return profiles;
 }
 
