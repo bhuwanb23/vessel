@@ -332,13 +332,24 @@ static void handleHardware(const httplib::Request&, httplib::Response& res) {
     sendJson(res, 200, makeSuccess(data));
 }
 
+// SSE keepalive comment (prevents proxy/firewall from closing idle connections)
+static const char SSE_KEEPALIVE[] = ":keepalive\n\n";
+
 static void handleHardwareLive(const httplib::Request&, httplib::Response& res) {
     sendSSEHeader(res);
     res.set_chunked_content_provider("text/event-stream",
         [](size_t, httplib::DataSink& sink) -> bool {
             static std::string fp;
             static auto last_send = std::chrono::steady_clock::now();
+            static auto last_keepalive = std::chrono::steady_clock::now();
             auto now = std::chrono::steady_clock::now();
+
+            // G: Send keepalive every 15 seconds
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_keepalive).count() >= 15) {
+                last_keepalive = now;
+                if (!sink.write(SSE_KEEPALIVE, strlen(SSE_KEEPALIVE))) return false;
+            }
+
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_send).count() < 500) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 return true;
@@ -589,7 +600,14 @@ static void handleDownloadProgress(const httplib::Request& req, httplib::Respons
     sendSSEHeader(res);
     res.set_chunked_content_provider("text/event-stream",
         [task](size_t, httplib::DataSink& sink) -> bool {
+            auto last_keepalive = std::chrono::steady_clock::now();
             while (task->running || !task->event_queue.empty()) {
+                // G: Send keepalive every 15s during long downloads
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_keepalive).count() >= 15) {
+                    last_keepalive = now;
+                    if (!sink.write(SSE_KEEPALIVE, strlen(SSE_KEEPALIVE))) return false;
+                }
                 std::string event;
                 if (task->waitForEvent(event, 1000)) {
                     if (!sink.write(event.c_str(), event.size())) return false;
