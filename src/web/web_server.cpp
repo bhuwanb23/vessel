@@ -16,6 +16,7 @@
 #include "recommend/catalog_loader.h"
 #include "recommend/recommendation_engine.h"
 #include "platform/platform_factory.h"
+#include "executor.h"
 
 #include <cstdio>
 #include <string>
@@ -650,17 +651,49 @@ static void handleExecuteStart(const httplib::Request& req, httplib::Response& r
         g_tasks[task->id] = task;
     }
 
-    // Start execution in background thread
-    std::thread([task, model_path, body]() {
+    // Parse optional strategy/prompt from body
+    std::string prompt = body.value("prompt", "Hello, how are you?");
+    int max_tokens = body.value("max_tokens", 200);
+
+    // Start execution in background thread using actual llama.cpp executor
+    std::thread([task, model_path, prompt, max_tokens]() {
         task->running = true;
         task->pushEvent("loading", { {"message", "Loading model..."} });
 
-        // For now, execution requires CLI — push a status message
-        task->pushEvent("status", {
-            {"message", "Web execution coming in a future update. Use CLI."},
-            {"cli_command", "vessel --model " + model_path + " --execute"}
-        });
-        task->pushEvent("complete", { {"message", "Use CLI for execution"} });
+        // Build a default strategy config (Full GPU)
+        StrategyConfig strategy;
+        strategy.placement = PlacementStrategy::FULL_GPU;
+        strategy.gpu_layers = -1;  // All layers on GPU
+        strategy.context_length = 4096;
+        strategy.kv_quant_bits = 16;
+
+        // Run actual inference via llama.cpp
+        ExecutionResult result = execute(
+            model_path, strategy, prompt, max_tokens,
+            // Progress callback: fires on each generated token
+            [task](int tokens_generated, double tok_per_sec) {
+                task->pushEvent("token", {
+                    {"tokens_generated", tokens_generated},
+                    {"current_tok_per_sec", tok_per_sec}
+                });
+            }
+        );
+
+        if (result.success) {
+            task->pushEvent("complete", {
+                {"tokens_generated", result.tokens_generated},
+                {"actual_tokens_per_sec", result.decode_tokens_per_sec},
+                {"actual_ttft_ms", result.prompt_eval_ms},
+                {"peak_vram_bytes", result.peak_vram_used_bytes},
+                {"throttled", result.throttled},
+                {"generated_text", result.generated_text}
+            });
+        } else {
+            task->pushEvent("error", {
+                {"message", result.error_message.empty() ? "Execution failed" : result.error_message}
+            });
+        }
+
         task->running = false;
     }).detach();
 

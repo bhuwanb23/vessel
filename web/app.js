@@ -258,7 +258,10 @@ async function loadRecommendations() {
                     <span>~${r.tokens_per_sec.toFixed(0)} tok/s</span>
                     <span>${r.vram_bytes>0?fmt(r.vram_bytes)+' VRAM':'CPU'}</span>
                 </div>
-                <button class="btn btn-primary btn-sm" onclick="document.getElementById('predict-url').value='${r.hf_url}';navigate('predict')">Use This →</button>
+                <div class="action-row">
+                    <button class="btn btn-primary btn-sm" onclick="downloadAndRun('${r.hf_url}','${r.model}')">\u2b07 Download & Run</button>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('predict-url').value='${r.hf_url}';navigate('predict')">Details</button>
+                </div>
             `;
             container.appendChild(card);
         });
@@ -266,6 +269,86 @@ async function loadRecommendations() {
         container.innerHTML = `<div class="dim">Error: ${e.message}</div>`;
     }
 }
+
+// =========================================================================
+// Download & Run Flow
+// =========================================================================
+downloadAndRun = async function(url, modelName) {
+    const output = document.getElementById('exec-output');
+    document.getElementById('exec-modal').classList.remove('hidden');
+    output.textContent = `Starting download: ${modelName}\n`;
+    document.getElementById('exec-tps').textContent = '--';
+    document.getElementById('exec-vram').textContent = '--';
+    document.getElementById('exec-temp').textContent = '--';
+    document.getElementById('exec-tokens').textContent = '0';
+    document.getElementById('exec-progress').style.width = '0%';
+    document.getElementById('btn-abort').classList.remove('hidden');
+    document.getElementById('btn-close-exec').classList.add('hidden');
+
+    try {
+        const result = await api.startDownload(url);
+        const taskId = result.task_id;
+        const streamUrl = result.stream_url;
+        output.textContent += `Download started (task: ${taskId})\n`;
+
+        // Subscribe to download SSE progress
+        const dlSSE = new EventSource(API + streamUrl);
+        dlSSE.addEventListener('progress', e => {
+            const d = JSON.parse(e.data);
+            const pct = d.bytes_total > 0 ? (d.bytes_downloaded / d.bytes_total * 100).toFixed(1) : 0;
+            const dlGB = (d.bytes_downloaded / 1e9).toFixed(2);
+            const totalGB = (d.bytes_total / 1e9).toFixed(2);
+            const speed = d.speed_mbs ? d.speed_mbs.toFixed(1) : '0';
+            const eta = d.eta_seconds > 60 ? Math.ceil(d.eta_seconds/60)+'m' : d.eta_seconds+'s';
+            document.getElementById('exec-progress').style.width = pct + '%';
+            document.getElementById('exec-tokens').textContent = `${dlGB}/${totalGB} GB`;
+            document.getElementById('exec-tps').textContent = speed + ' MB/s';
+            document.getElementById('exec-temp').textContent = eta;
+        });
+        dlSSE.addEventListener('complete', e => {
+            dlSSE.close();
+            const d = JSON.parse(e.data);
+            const localPath = d.local_path;
+            output.textContent += `\nDownload complete: ${localPath}\n`;
+            output.textContent += `Starting execution...\n`;
+
+            // Now execute the downloaded model
+            const exResult = await api.startExecute(localPath, null, 'Hello, how are you?', 200);
+            const exStreamUrl = exResult.stream_url;
+            const exSSE = new EventSource(API + exStreamUrl);
+            exSSE.addEventListener('token', e2 => {
+                const td = JSON.parse(e2.data);
+                output.textContent += td.token || '';
+                document.getElementById('exec-tokens').textContent = td.tokens_generated;
+                document.getElementById('exec-tps').textContent = td.current_tok_per_sec ? td.current_tok_per_sec.toFixed(0) + ' tok/s' : '--';
+                output.scrollTop = output.scrollHeight;
+            });
+            exSSE.addEventListener('complete', e2 => {
+                exSSE.close();
+                const td = JSON.parse(e2.data);
+                if (td.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${td.actual_tokens_per_sec.toFixed(1)} tok/s`;
+                if (td.generated_text) output.textContent += `\n\n${td.generated_text}`;
+                document.getElementById('btn-abort').classList.add('hidden');
+                document.getElementById('btn-close-exec').classList.remove('hidden');
+            });
+            exSSE.addEventListener('error', () => {
+                exSSE.close();
+                document.getElementById('btn-abort').classList.add('hidden');
+                document.getElementById('btn-close-exec').classList.remove('hidden');
+            });
+        });
+        dlSSE.addEventListener('error', e => {
+            dlSSE.close();
+            output.textContent += '\nDownload failed. Check console for details.\n';
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+        });
+    } catch(err) {
+        output.textContent += `\nError: ${err.message}\n`;
+        document.getElementById('btn-abort').classList.add('hidden');
+        document.getElementById('btn-close-exec').classList.remove('hidden');
+    }
+};
 
 // =========================================================================
 // View: Models
