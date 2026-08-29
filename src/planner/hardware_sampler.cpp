@@ -1,5 +1,6 @@
 #include "hardware_sampler.h"
 #include "executor.h"
+#include "nvml_loader.h"
 #include <csignal>
 #include <cstdio>
 #include <chrono>
@@ -7,84 +8,34 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-// NVML loaded dynamically at runtime — no nvml.lib required at link time.
-// NVML is always present on machines with NVIDIA drivers.
-typedef int nvmlReturn_t;
-typedef void* nvmlDevice_t;
-typedef struct { unsigned long long total; unsigned long long free; unsigned long long used; } nvmlMemory_t;
-static const int NVML_SUCCESS = 0;
-static const int NVML_TEMPERATURE_GPU = 0;
-static const int NVML_CLOCK_SM = 0;
-static const int NVML_PCIE_UTIL_RX_BYTES = 1;
-static const int NVML_PCIE_UTIL_TX_BYTES = 2;
-typedef nvmlReturn_t (*pfn_nvmlInit)(void);
-typedef nvmlReturn_t (*pfn_nvmlShutdown)(void);
-typedef nvmlReturn_t (*pfn_nvmlDeviceGetCount)(unsigned int*);
-typedef nvmlReturn_t (*pfn_nvmlDeviceGetHandleByIndex)(unsigned int, nvmlDevice_t*);
-typedef nvmlReturn_t (*pfn_nvmlDeviceGetMemoryInfo)(nvmlDevice_t, nvmlMemory_t*);
-typedef nvmlReturn_t (*pfn_nvmlDeviceGetTemperature)(nvmlDevice_t, unsigned int, unsigned int*);
-typedef nvmlReturn_t (*pfn_nvmlDeviceGetClockInfo)(nvmlDevice_t, unsigned int, unsigned int*);
-typedef nvmlReturn_t (*pfn_nvmlDeviceGetPcieThroughput)(nvmlDevice_t, unsigned int, unsigned int*);
-static HMODULE nvml_dll = nullptr;
-static pfn_nvmlInit nvmlInit_fn = nullptr;
-static pfn_nvmlShutdown nvmlShutdown_fn = nullptr;
-static pfn_nvmlDeviceGetCount nvmlDeviceGetCount_fn = nullptr;
-static pfn_nvmlDeviceGetHandleByIndex nvmlDeviceGetHandleByIndex_fn = nullptr;
-static pfn_nvmlDeviceGetMemoryInfo nvmlDeviceGetMemoryInfo_fn = nullptr;
-static pfn_nvmlDeviceGetTemperature nvmlDeviceGetTemperature_fn = nullptr;
-static pfn_nvmlDeviceGetClockInfo nvmlDeviceGetClockInfo_fn = nullptr;
-static pfn_nvmlDeviceGetPcieThroughput nvmlDeviceGetPcieThroughput_fn = nullptr;
 #elif defined(__APPLE__)
 #include <sys/sysctl.h>
 #endif
 
 // =============================================================================
 // NVML State (NVIDIA only, not available on macOS)
+// Uses shared nvml_loader for dynamic loading
 // =============================================================================
 
-#if defined(_WIN32)
 static bool nvml_initialized = false;
 static nvmlDevice_t nvml_device = nullptr;
 
 static void ensure_nvml() {
     if (nvml_initialized) return;
-    // Load nvml.dll from the NVIDIA driver installation
-    nvml_dll = LoadLibraryA("nvml.dll");
-    if (!nvml_dll) return;
-    nvmlInit_fn = (pfn_nvmlInit)GetProcAddress(nvml_dll, "nvmlInit_v2");
-    if (!nvmlInit_fn) nvmlInit_fn = (pfn_nvmlInit)GetProcAddress(nvml_dll, "nvmlInit");
-    nvmlShutdown_fn = (pfn_nvmlShutdown)GetProcAddress(nvml_dll, "nvmlShutdown");
-    nvmlDeviceGetCount_fn = (pfn_nvmlDeviceGetCount)GetProcAddress(nvml_dll, "nvmlDeviceGetCount");
-    nvmlDeviceGetHandleByIndex_fn = (pfn_nvmlDeviceGetHandleByIndex)GetProcAddress(nvml_dll, "nvmlDeviceGetHandleByIndex_v2");
-    if (!nvmlDeviceGetHandleByIndex_fn) nvmlDeviceGetHandleByIndex_fn = (pfn_nvmlDeviceGetHandleByIndex)GetProcAddress(nvml_dll, "nvmlDeviceGetHandleByIndex");
-    nvmlDeviceGetMemoryInfo_fn = (pfn_nvmlDeviceGetMemoryInfo)GetProcAddress(nvml_dll, "nvmlDeviceGetMemoryInfo");
-    nvmlDeviceGetTemperature_fn = (pfn_nvmlDeviceGetTemperature)GetProcAddress(nvml_dll, "nvmlDeviceGetTemperature");
-    nvmlDeviceGetClockInfo_fn = (pfn_nvmlDeviceGetClockInfo)GetProcAddress(nvml_dll, "nvmlDeviceGetClockInfo");
-    nvmlDeviceGetPcieThroughput_fn = (pfn_nvmlDeviceGetPcieThroughput)GetProcAddress(nvml_dll, "nvmlDeviceGetPcieThroughput");
-    if (!nvmlInit_fn || !nvmlDeviceGetCount_fn || !nvmlDeviceGetHandleByIndex_fn ||
-        !nvmlDeviceGetMemoryInfo_fn || !nvmlDeviceGetTemperature_fn ||
-        !nvmlDeviceGetClockInfo_fn || !nvmlDeviceGetPcieThroughput_fn) {
-        // Not all symbols found — don't use NVML
-        FreeLibrary(nvml_dll);
-        nvml_dll = nullptr;
-        return;
-    }
-    nvmlReturn_t ret = nvmlInit_fn();
+    if (!nvml_loader_init()) return;
+    nvmlReturn_t ret = nvml_fn_Init();
     if (ret == NVML_SUCCESS) {
         nvml_initialized = true;
         unsigned int device_count = 0;
-        nvmlDeviceGetCount_fn(&device_count);
-        if (device_count > 0) nvmlDeviceGetHandleByIndex_fn(0, &nvml_device);
+        if (nvml_fn_DeviceGetCount) nvml_fn_DeviceGetCount(&device_count);
+        if (device_count > 0 && nvml_fn_DeviceGetHandleByIndex)
+            nvml_fn_DeviceGetHandleByIndex(0, &nvml_device);
     }
 }
 static void shutdown_nvml() {
-    if (nvml_initialized && nvmlShutdown_fn) { nvmlShutdown_fn(); nvml_initialized = false; nvml_device = nullptr; }
-    if (nvml_dll) { FreeLibrary(nvml_dll); nvml_dll = nullptr; }
+    if (nvml_initialized && nvml_fn_Shutdown) { nvml_fn_Shutdown(); nvml_initialized = false; nvml_device = nullptr; }
+    nvml_loader_shutdown();
 }
-#else
-static void ensure_nvml() {}
-static void shutdown_nvml() {}
-#endif
 
 // =============================================================================
 // HardwareSampler
