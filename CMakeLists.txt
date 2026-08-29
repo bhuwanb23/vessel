@@ -121,6 +121,7 @@ set(HOTCOLD_SOURCES
 set(PLATFORM_SOURCES
     src/platform/cpu_profiler.cpp
     src/platform/platform_factory.cpp
+    include/nvml_loader.cpp
 )
 
 if(PLATFORM_WINDOWS)
@@ -180,7 +181,7 @@ endif()
 # ============================================
 set(PLATFORM_LIBS "")
 if(PLATFORM_WINDOWS)
-    list(APPEND PLATFORM_LIBS nvml winhttp ws2_32)
+    list(APPEND PLATFORM_LIBS winhttp ws2_32)
 elseif(PLATFORM_LINUX)
     list(APPEND PLATFORM_LIBS curl pthread dl)
 elseif(PLATFORM_MACOS)
