@@ -1,8 +1,10 @@
 #include "calibration_log.h"
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shlobj.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -486,29 +488,44 @@ int count_records_for_hardware(const std::string& fingerprint,
 // =============================================================================
 
 std::string get_log_path() {
-    // Try %APPDATA%\vessel\calibration.jsonl
+#if defined(_WIN32)
+    // Windows: %APPDATA%\vessel\calibration.jsonl
     char appdata[MAX_PATH] = {};
     HRESULT hr = SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appdata);
     if (SUCCEEDED(hr) && appdata[0] != '\0') {
         std::string dir = std::string(appdata) + "\\vessel";
-
-        // Create directory if it doesn't exist
-        CreateDirectoryA(dir.c_str(), NULL);  // succeeds if already exists
-
+        CreateDirectoryA(dir.c_str(), NULL);
         return dir + "\\calibration.jsonl";
     }
-
     // Fallback: next to executable
     char exe_path[MAX_PATH] = {};
     GetModuleFileNameA(NULL, exe_path, MAX_PATH);
     std::string path(exe_path);
     auto pos = path.find_last_of('\\');
-    if (pos != std::string::npos) {
-        path = path.substr(0, pos + 1) + "calibration.jsonl";
-    } else {
-        path = "calibration.jsonl";
-    }
+    if (pos != std::string::npos) path = path.substr(0, pos + 1) + "calibration.jsonl";
+    else path = "calibration.jsonl";
     return path;
+#elif defined(__APPLE__)
+    // macOS: ~/Library/Application Support/vessel/calibration.jsonl
+    const char* home = getenv("HOME");
+    if (home) {
+        std::string dir = std::string(home) + "/Library/Application Support/vessel";
+        std::string cmd = "mkdir -p \"" + dir + "\"";
+        system(cmd.c_str());
+        return dir + "/calibration.jsonl";
+    }
+    return "calibration.jsonl";
+#else
+    // Linux: ~/.config/vessel/calibration.jsonl
+    const char* home = getenv("HOME");
+    if (home) {
+        std::string dir = std::string(home) + "/.config/vessel";
+        std::string cmd = "mkdir -p \"" + dir + "\"";
+        system(cmd.c_str());
+        return dir + "/calibration.jsonl";
+    }
+    return "calibration.jsonl";
+#endif
 }
 
 // =============================================================================
