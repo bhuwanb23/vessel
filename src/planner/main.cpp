@@ -85,6 +85,7 @@ int main(int argc, char* argv[]) {
     bool serve_ui            = false;  // --serve-ui: start web dashboard
     bool no_browser           = false;  // --no-browser: don't auto-open browser
     int  ui_port              = 8080;   // --port: dashboard port
+    std::string bind_address  = "127.0.0.1"; // --bind: address to bind to (default localhost)
     bool recommend_mode      = false;  // --recommend: show model recommendations
     std::string use_case     = "all";  // --use-case: filter by use case
     int top_n                = 8;      // --top: number of recommendations to show
@@ -227,6 +228,8 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--port" && i + 1 < argc) {
             ui_port = atoi(argv[++i]);
             if (ui_port < 1024 || ui_port > 65535) ui_port = 8080;
+        } else if (arg == "--bind" && i + 1 < argc) {
+            bind_address = argv[++i];
         } else if (arg == "--recommend") {
             recommend_mode = true;
         } else if (arg == "--use-case" && i + 1 < argc) {
@@ -250,7 +253,7 @@ int main(int argc, char* argv[]) {
 
     // --serve-ui: Start web dashboard and exit
     if (serve_ui) {
-        return start_web_server(ui_port, "", !no_browser) ? 0 : 1;
+        return start_web_server(ui_port, "", !no_browser, bind_address) ? 0 : 1;
     }
 
     // Mutual exclusivity: --recommend and --model cannot be used together

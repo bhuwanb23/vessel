@@ -808,6 +808,10 @@ void print_usage() {
     printf("  --max-download <GB>                 Max download size in GB (e.g., 5)\n");
     printf("  --top <N>                           Number of recommendations to show (default: 8)\n");
     printf("  --catalog <path>                    Path to custom catalog JSON file\n");
+    printf("  --serve-ui                          Start web dashboard (localhost:8080)\n");
+    printf("  --port <port>                       Dashboard port (default: 8080)\n");
+    printf("  --bind <addr>                       Bind address (default: 127.0.0.1)\n");
+    printf("  --no-browser                        Don't auto-open browser for dashboard\n");
     printf("  --help                              Show this help\n\n");
     printf("Examples:\n");
     printf("  vessel --model ./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\n");

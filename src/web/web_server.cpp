@@ -31,6 +31,62 @@
 
 namespace fs = std::filesystem;
 
+static int g_server_port = 8080;
+
+// =============================================================================
+// Security: Path Validation (F5)
+// =============================================================================
+
+static bool is_safe_model_path(const std::string& path, std::string& error) {
+    if (path.empty()) {
+        error = "Path is empty";
+        return false;
+    }
+
+    // Must be an absolute path
+    fs::path p(path);
+    if (!p.is_absolute()) {
+        error = "Path must be absolute (e.g. C:\\models\\model.gguf)";
+        return false;
+    }
+
+    // Must not contain .. components (path traversal)
+    try {
+        fs::path canonical = fs::weakly_canonical(p);
+        std::string canonical_str = canonical.string();
+        // Check for .. after canonicalization (shouldn't happen, but defensive)
+        if (canonical_str.find("..") != std::string::npos) {
+            error = "Path contains path traversal (..)";
+            return false;
+        }
+    } catch (...) {
+        error = "Path could not be resolved";
+        return false;
+    }
+
+    // Must end in .gguf
+    std::string ext = p.extension().string();
+    // Handle case-insensitive extension
+    for (auto& c : ext) c = (char)tolower((unsigned char)c);
+    if (ext != ".gguf") {
+        error = "File must be a .gguf model file";
+        return false;
+    }
+
+    // Must exist and be readable
+    std::error_code ec;
+    if (!fs::exists(p, ec) || ec) {
+        error = "File does not exist: " + path;
+        return false;
+    }
+    if (!fs::is_regular_file(p, ec) || ec) {
+        error = "Path is not a regular file: " + path;
+        return false;
+    }
+
+    return true;
+}
+
 // Timer utility
 class Timer {
     std::chrono::high_resolution_clock::time_point t0;
@@ -74,15 +130,19 @@ static json makeError(const std::string& code, const std::string& msg, const std
              {"error", { {"code", code}, {"message", msg}, {"details", details} }} };
 }
 
+static std::string get_cors_origin() {
+    return "http://localhost:" + std::to_string(g_server_port);
+}
+
 static void sendJson(httplib::Response& res, int status, const json& envelope) {
     res.status = status;
-    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Access-Control-Allow-Origin", get_cors_origin());
     res.set_header("Content-Type", "application/json");
     res.set_content(envelope.dump(), "application/json");
 }
 
 static void sendSSEHeader(httplib::Response& res) {
-    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Access-Control-Allow-Origin", get_cors_origin());
     res.set_header("Content-Type", "text/event-stream");
     res.set_header("Cache-Control", "no-cache");
     res.set_header("Connection", "keep-alive");
@@ -554,9 +614,13 @@ static void handleExecuteStart(const httplib::Request& req, httplib::Response& r
         sendJson(res, 400, makeError("MISSING_PARAM", "model_path is required"));
         return;
     }
-    if (!fs::exists(model_path)) {
-        sendJson(res, 404, makeError("FILE_NOT_FOUND", "Model file not found: " + model_path));
-        return;
+    // F5: Path traversal validation
+    {
+        std::string path_error;
+        if (!is_safe_model_path(model_path, path_error)) {
+            sendJson(res, 400, makeError("INVALID_PATH", path_error));
+            return;
+        }
     }
 
     auto task = std::make_shared<Task>();
@@ -699,22 +763,30 @@ static void setupRoutes(httplib::Server& server) {
     server.Get("/api/health", handleHealth);
     server.Get("/api/hardware", handleHardware);
     server.Get("/api/hardware/live", handleHardwareLive);
-    server.Post("/api/predict", handlePredict);
+    // Debug: test POST route registration
+    server.Post("/api/test-post", [](const httplib::Request& req, httplib::Response& res) {
+        sendJson(res, 200, makeSuccess({{"message", "POST works!"}}));
+    });
+    server.Post("/api/predict", [](const httplib::Request& req, httplib::Response& res) {
+        handlePredict(req, res);
+    });
     server.Get("/api/recommend", handleRecommend);
     server.Get("/api/catalog", handleCatalog);
     server.Get("/api/models/local", handleLocalModels);
     server.Post("/api/download", handleDownloadStart);
     server.Get("/api/download/:id/progress", handleDownloadProgress);
-    server.Post("/api/execute", handleExecuteStart);
+    server.Post("/api/execute", [](const httplib::Request& req, httplib::Response& res) {
+        handleExecuteStart(req, res);
+    });
     server.Get("/api/execute/:id/stream", handleExecuteStream);
     server.Post("/api/execute/:id/abort", handleExecuteAbort);
     server.Get("/api/calibration", handleCalibration);
     server.Get("/api/calibration/history", handleCalibrationHistory);
     server.Delete("/api/calibration", handleCalibrationReset);
 
-    // CORS
-    server.Options(".*", [](const httplib::Request&, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
+    // CORS (F3) - restrict to localhost only
+    server.Options(".*", [&server](const httplib::Request&, httplib::Response& res) {
+        res.set_header("Access-Control-Allow-Origin", "http://localhost:" + std::to_string(g_server_port));
         res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type");
         res.status = 204;
@@ -725,14 +797,23 @@ static void setupRoutes(httplib::Server& server) {
 // Public API
 // =============================================================================
 
-bool start_web_server(int port, const std::string&, bool open_browser_flag) {
+bool start_web_server(int port, const std::string&, bool open_browser_flag, const std::string& bind_address) {
+    g_server_port = port;
     httplib::Server server;
     setupRoutes(server);
     server.set_error_handler([](const httplib::Request&, httplib::Response& res) {
         sendJson(res, 404, makeError("NOT_FOUND", "Endpoint not found"));
     });
 
-    printf("\n  Vessel Dashboard\n  http://localhost:%d\n  Press Ctrl+C to stop\n\n", port);
+    // F1: Localhost-only binding by default
+    if (bind_address == "0.0.0.0") {
+        printf("\n  WARNING: Binding to 0.0.0.0 — the dashboard is accessible from other machines on the network.\n");
+        printf("  For production use, consider adding authentication.\n");
+        printf("  Default (safer): bind to 127.0.0.1 (localhost only)\n\n");
+    }
+
+    printf("\n  Vessel Dashboard\n  http://%s:%d\n  Press Ctrl+C to stop\n\n",
+           bind_address.c_str(), port);
     if (open_browser_flag) openBrowser("http://localhost:" + std::to_string(port));
-    return server.listen("0.0.0.0", port);
+    return server.listen(bind_address.c_str(), port);
 }
