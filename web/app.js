@@ -296,6 +296,8 @@ async function loadLocalModels() {
 // =========================================================================
 // View: Calibration
 // =========================================================================
+let calChart = null;
+
 async function loadCalibration() {
     try {
         const data = await api.getCalibration();
@@ -309,6 +311,8 @@ async function loadCalibration() {
         const hist = await api.getCalHistory();
         const tbody = document.getElementById('cal-body');
         tbody.innerHTML = '';
+        const chartContainer = document.getElementById('cal-chart-container');
+
         if (hist.entries && hist.entries.length > 0) {
             document.getElementById('cal-table').classList.remove('hidden');
             hist.entries.slice(-20).reverse().forEach(e => {
@@ -325,6 +329,59 @@ async function loadCalibration() {
                 `;
                 tbody.appendChild(row);
             });
+
+            // Render Chart.js scatter plot: predicted vs actual tok/s
+            const validEntries = hist.entries.filter(e => e.predicted_tps > 0 && e.actual_tps > 0);
+            if (validEntries.length > 0 && typeof Chart !== 'undefined') {
+                chartContainer.classList.remove('hidden');
+                const ctx = document.getElementById('cal-chart').getContext('2d');
+                if (calChart) calChart.destroy();
+                const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+                const textColor = isDark ? '#e6edf3' : '#1f2328';
+                const maxVal = Math.max(...validEntries.map(e => Math.max(e.predicted_tps, e.actual_tps))) * 1.2;
+                calChart = new Chart(ctx, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Predicted vs Actual',
+                                data: validEntries.map(e => ({x: e.predicted_tps, y: e.actual_tps})),
+                                backgroundColor: isDark ? '#58a6ff' : '#0969da',
+                                pointRadius: 5,
+                                pointHoverRadius: 7
+                            },
+                            {
+                                label: 'Perfect prediction',
+                                data: [{x:0,y:0},{x:maxVal,y:maxVal}],
+                                type: 'line',
+                                borderColor: isDark ? '#8b949e' : '#656d76',
+                                borderDash: [5,5],
+                                pointRadius: 0,
+                                borderWidth: 1,
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { labels: { color: textColor } },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => `Pred: ${ctx.parsed.x.toFixed(1)} | Actual: ${ctx.parsed.y.toFixed(1)} tok/s`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { title: { display: true, text: 'Predicted tok/s', color: textColor },
+                                 grid: { color: gridColor }, ticks: { color: textColor } },
+                            y: { title: { display: true, text: 'Actual tok/s', color: textColor },
+                                 grid: { color: gridColor }, ticks: { color: textColor } }
+                        }
+                    }
+                });
+            }
         }
     } catch(e) { console.error(e); }
 }

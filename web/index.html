@@ -144,7 +144,12 @@
                     <button class="btn btn-danger" onclick="resetCalibration()">Reset Calibration</button>
                 </div>
             </div>
+            <div id="cal-chart-container" class="card hidden">
+                <h2>Predicted vs Actual (tok/s)</h2>
+                <canvas id="cal-chart" height="250"></canvas>
+            </div>
             <div id="cal-table" class="card hidden">
+                <h2>Run History</h2>
                 <table>
                     <thead>
                         <tr>
@@ -192,6 +197,7 @@
         <span id="footer-status">Ready</span>
     </footer>
 
+    <script src="/chart.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

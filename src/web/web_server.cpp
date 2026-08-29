@@ -785,6 +785,9 @@ static void setupRoutes(httplib::Server& server) {
     server.Get("/styles.css", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(WEB_STYLES_CSS, WEB_STYLES_CSS_MIME);
     });
+    server.Get("/chart.min.js", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(WEB_CHART_JS, WEB_CHART_JS_MIME);
+    });
 
     // API
     server.Get("/api/health", handleHealth);

@@ -204,9 +204,10 @@ endif()
 include(${CMAKE_SOURCE_DIR}/cmake/embed_files.cmake)
 
 embed_files(embedded_web.h
-    ${CMAKE_SOURCE_DIR}/web/index.html   WEB_INDEX_HTML   text/html
-    ${CMAKE_SOURCE_DIR}/web/app.js       WEB_APP_JS       application/javascript
-    ${CMAKE_SOURCE_DIR}/web/styles.css   WEB_STYLES_CSS   text/css
+    ${CMAKE_SOURCE_DIR}/web/index.html              WEB_INDEX_HTML         text/html
+    ${CMAKE_SOURCE_DIR}/web/app.js                  WEB_APP_JS             application/javascript
+    ${CMAKE_SOURCE_DIR}/web/styles.css              WEB_STYLES_CSS         text/css
+    ${CMAKE_SOURCE_DIR}/web/vendor/chart.umd.min.js WEB_CHART_JS           application/javascript
 )
 
 # httplib include path
