@@ -1,0 +1,201 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  LLAMA_CPP_VERSION: b5544
+
+jobs:
+  # =========================================================================
+  # Windows Build — CUDA backend
+  # =========================================================================
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Clone llama.cpp
+        shell: bash
+        run: |
+          if [ ! -d "llama.cpp" ]; then
+            git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          fi
+
+      - name: Cache llama.cpp build
+        uses: actions/cache@v4
+        with:
+          path: llama.cpp/build
+          key: llama-win-cuda-${{ env.LLAMA_CPP_VERSION }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: llama-win-cuda-
+
+      - name: Build llama.cpp (CUDA)
+        shell: bash
+        run: |
+          cd llama.cpp
+          if [ ! -f "build/bin/Release/llama.dll" ] && [ ! -f "build/bin/Release/ggml-cuda.dll" ]; then
+            cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+            cmake --build build --config Release -j%NUMBER_OF_PROCESSORS%
+          else
+            echo "llama.cpp already built, skipping"
+          fi
+
+      - name: Build vessel
+        shell: bash
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON
+          cmake --build build --config Release -j%NUMBER_OF_PROCESSORS%
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -name "vessel.exe" -exec cp {} dist/vessel-windows-amd64.exe \;
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vessel-windows-amd64
+          path: dist/vessel-windows-amd64.exe
+
+  # =========================================================================
+  # Linux Build — CPU backend
+  # =========================================================================
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
+
+      - name: Clone llama.cpp
+        run: |
+          if [ ! -d "llama.cpp" ]; then
+            git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          fi
+
+      - name: Cache llama.cpp build
+        uses: actions/cache@v4
+        with:
+          path: llama.cpp/build
+          key: llama-linux-cpu-${{ env.LLAMA_CPP_VERSION }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: llama-linux-cpu-
+
+      - name: Build llama.cpp (CPU)
+        run: |
+          cd llama.cpp
+          if [ ! -f "build/bin/libllama.so" ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build -j$(nproc)
+          else
+            echo "llama.cpp already built, skipping"
+          fi
+
+      - name: Build vessel
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          find build -name "vessel" -type f -executable -exec cp {} dist/vessel-linux-amd64 \;
+          chmod +x dist/vessel-linux-amd64
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vessel-linux-amd64
+          path: dist/vessel-linux-amd64
+
+  # =========================================================================
+  # macOS Build — Metal backend
+  # =========================================================================
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone llama.cpp
+        run: |
+          if [ ! -d "llama.cpp" ]; then
+            git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          fi
+
+      - name: Cache llama.cpp build
+        uses: actions/cache@v4
+        with:
+          path: llama.cpp/build
+          key: llama-macos-metal-${{ env.LLAMA_CPP_VERSION }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: llama-macos-metal-
+
+      - name: Build llama.cpp (Metal)
+        run: |
+          cd llama.cpp
+          if [ ! -f "build/bin/libllama.dylib" ]; then
+            cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
+            cmake --build build -j$(sysctl -n hw.ncpu)
+          else
+            echo "llama.cpp already built, skipping"
+          fi
+
+      - name: Build vessel
+        run: |
+          cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          find build -name "vessel" -type f -perm +111 -exec cp {} dist/vessel-macos-arm64 \;
+          chmod +x dist/vessel-macos-arm64
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vessel-macos-arm64
+          path: dist/vessel-macos-arm64
+
+  # =========================================================================
+  # Create Release — Upload all binaries
+  # =========================================================================
+  release:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: List files
+        run: find . -type f | grep -E "vessel-" | head -20
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            vessel-windows-amd64/vessel-windows-amd64.exe
+            vessel-linux-amd64/vessel-linux-amd64
+            vessel-macos-arm64/vessel-macos-arm64
