@@ -1,10 +1,15 @@
 #pragma once
 
 #include "types.h"
+#include "stream_sampler.h"
 #include <string>
 #include <functional>
 #include <vector>
 #include <atomic>
+
+// Forward declare llama.cpp types
+struct llama_model;
+struct llama_context;
 
 // =============================================================================
 // Step 6 — Executor: llama.cpp Integration
@@ -71,6 +76,40 @@ ExecutionResult execute_moe(const std::string& model_path,
 
 // Get CPU thread count (for n_threads parameter)
 int get_cpu_thread_count();
+
+// =============================================================================
+// Step 14 — Streaming Inference (for API Server)
+// =============================================================================
+// Uses pre-loaded model+context (owned by ModelManager).
+// Calls on_token for each generated token for SSE streaming.
+// Clears KV cache before each request.
+// =============================================================================
+
+struct StreamingConfig {
+    SamplingConfig sampling;
+    int max_tokens = 512;
+    bool echo_prompt = false;  // Include prompt in output
+};
+
+struct StreamCallbacks {
+    // Called for each generated token (text)
+    std::function<void(const std::string& token_text)> on_token;
+    // Called when generation finishes
+    std::function<void(const std::string& finish_reason, int prompt_tokens, int completion_tokens)> on_done;
+    // Called on error
+    std::function<void(const std::string& error)> on_error;
+};
+
+// Streaming execute — calls on_token for each generated token.
+// Uses pre-loaded model+context (model_manager owns lifecycle).
+// Returns true on success, false on error (calls on_error).
+bool execute_streaming(
+    struct llama_model* model,
+    struct llama_context* ctx,
+    const std::string& formatted_prompt,
+    const StreamingConfig& config,
+    StreamCallbacks callbacks
+);
 
 // =============================================================================
 // Graceful Abort — Ctrl+C handling
