@@ -9,7 +9,6 @@
 #include <sys/sysctl.h>
 #include <mach/mach.h>
 #else
-#include <sys/sysctl.h>
 #include <fstream>
 #endif
 

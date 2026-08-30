@@ -267,7 +267,7 @@ bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
 #include <curl/curl.h>
 
 // libcurl write callback: appends data to a std::vector<uint8_t>
-static size_t curl_write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+static size_t curl_write_data(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
     auto* buffer = static_cast<std::vector<uint8_t>*>(userp);
     size_t old_size = buffer->size();
@@ -291,7 +291,7 @@ bool fetch_range(const std::string& url, uint64_t range_end, std::vector<uint8_t
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_RANGE, range_str);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_data);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output_buffer);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);  // Follow redirects
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
@@ -338,7 +338,7 @@ bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
     }
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_data);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output_buffer);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
