@@ -234,6 +234,9 @@ if(LLAMA_AVAILABLE)
 add_executable(vessel
     src/planner/main.cpp
     src/web/web_server.cpp
+    src/web/api_server.cpp
+    src/web/model_manager.cpp
+    src/web/stream_sampler.cpp
     ${PLANNER_SOURCES}
     ${PROFILER_SOURCES}
     ${FETCHER_SOURCES}
@@ -248,6 +251,8 @@ target_include_directories(vessel PRIVATE
     ${HTTPLIB_INCLUDE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
     src/web
+    src/predictor
+    src/planner
 )
 target_link_directories(vessel PRIVATE ${SHARED_LINK_DIRS})
 target_link_libraries(vessel PRIVATE ${LLAMA_LIBS} ${PLATFORM_LIBS})
