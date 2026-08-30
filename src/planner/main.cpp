@@ -101,6 +101,13 @@ int main(int argc, char* argv[]) {
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
+        } else if (arg == "--version" || arg == "-v") {
+#ifdef VESSEL_VERSION
+            printf("vessel %s\n", VESSEL_VERSION);
+#else
+            printf("vessel 0.2.0\n");
+#endif
+            return 0;
         } else if (arg == "--calibration-info") {
             // Print calibration log info and exit
             std::string log_path = get_log_path();

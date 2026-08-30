@@ -20,6 +20,22 @@
 
 ## Quick Start
 
+### Install (one command)
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/bhuwanb23/vessel/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/bhuwanb23/vessel/main/install.ps1 | iex"
+```
+
+Or download a binary directly from [**Releases**](https://github.com/bhuwanb23/vessel/releases/tag/v0.1.0).
+
+### Usage
+
 ```bash
 # See what models fit your hardware
 vessel --recommend
@@ -29,9 +45,10 @@ vessel --model https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resol
 
 # Download and run
 vessel --model <url> --execute
-```
 
-**Install:** Download the latest binary from [Releases](https://github.com/youruser/vessel/releases).
+# Start an OpenAI-compatible API server (drop-in for Ollama)
+vessel --serve --models-dir ./models
+```
 
 ---
 
@@ -126,6 +143,17 @@ Platform:
   --gpu <index>                       Select GPU by index (for multi-GPU systems)
   --gpu-name <pattern>                Select GPU by name pattern (e.g., 'RTX 4090')
 
+API Server (Step 14):
+  --serve                             Start OpenAI-compatible API server (port 11434)
+  --api-port <port>                   API server port (default: 11434)
+  --models-dir <path>                 Directory to scan for .gguf models (repeatable)
+
+Web Dashboard (Step 13):
+  --serve-ui                          Start web dashboard (localhost:8080)
+  --port <port>                       Dashboard port (default: 8080)
+  --bind <addr>                       Bind address (default: 127.0.0.1)
+  --no-browser                        Don't auto-open browser for dashboard
+
 Recommendation:
   --recommend                         Show model recommendations for your hardware
   --use-case <chat|coding|...>        Filter recommendations by use case
@@ -175,7 +203,7 @@ Any GGUF model from Hugging Face works with `--model <url>`.
 ### Build
 
 ```bash
-git clone https://github.com/youruser/vessel.git
+git clone https://github.com/bhuwanb23/vessel.git
 cd vessel
 
 # NVIDIA
@@ -203,6 +231,16 @@ cd build/bin/Release  # or Debug
 ./recommend_test
 ./catalog_test
 ./step11_test
+```
+
+### Install from source
+
+```bash
+# Linux / macOS
+sudo cp build/bin/Release/vessel /usr/local/bin/
+
+# Windows (run as Administrator)
+copy build\bin\Release\vessel.exe C:\Users\<you>\.vessel\bin\
 ```
 
 ---

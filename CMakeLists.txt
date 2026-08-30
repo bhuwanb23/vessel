@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
-project(vessel LANGUAGES C CXX)
+project(vessel VERSION 0.2.0 LANGUAGES C CXX)
+
+# Version string for compile-time embedding
+add_compile_definitions(VESSEL_VERSION="${PROJECT_VERSION}")
 
 # ---- C++ standard ----
 set(CMAKE_CXX_STANDARD 17)
