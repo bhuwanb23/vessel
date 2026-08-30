@@ -22,9 +22,11 @@
 #include <sys/sysctl.h>
 #include <mach/mach.h>
 #include <unistd.h>
+#include <fcntl.h>
 #else
 #include <fstream>
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 
 #include <cstdio>
