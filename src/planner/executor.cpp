@@ -6,6 +6,10 @@
 #include "../hotcold/mask_file.h"
 #include <llama.h>
 #include <ggml-backend.h>
+#include <ggml-cpu.h>
+#ifdef GGML_USE_CUDA
+#include <ggml-cuda.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -20,8 +24,19 @@ bool executor_init() {
     // Initialize llama.cpp backends (CPU + CUDA)
     llama_backend_init();
     ggml_backend_load_all();
+
+    // If no backends loaded (static build), register them manually
+    if (ggml_backend_reg_count() == 0) {
+        fprintf(stderr, "[executor] No backends loaded dynamically, registering statically-linked backends...\n");
+        ggml_backend_register(ggml_backend_cpu_reg());
+#ifdef GGML_USE_CUDA
+        ggml_backend_register(ggml_backend_cuda_reg());
+#endif
+        fprintf(stderr, "[executor] Registered %zu backend(s)\n", ggml_backend_reg_count());
+    }
+
     // NVML is initialized on first HardwareSampler construction
-    return true;
+    return ggml_backend_reg_count() > 0;
 }
 
 void executor_shutdown() {
