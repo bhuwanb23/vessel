@@ -59,14 +59,23 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find build -name "vessel.exe" -exec cp {} dist/vessel-windows-amd64.exe \;
+          find build -name "vessel.exe" -exec cp {} dist/ \;
+          # Copy llama.cpp DLLs needed at runtime
+          for dll in llama.dll ggml.dll ggml-base.dll ggml-cpu.dll; do
+            find llama.cpp/build -name "$dll" -exec cp {} dist/ \; 2>/dev/null || true
+          done
           ls -la dist/
+          # Create zip for distribution
+          cd dist && 7z a ../vessel-windows-amd64.zip vessel.exe *.dll 2>/dev/null || (cd dist && zip ../vessel-windows-amd64.zip vessel.exe *.dll)
+          ls -la ../vessel-windows-amd64.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: vessel-windows-amd64
-          path: dist/vessel-windows-amd64.exe
+          path: |
+            dist/vessel.exe
+            vessel-windows-amd64.zip
 
   # =========================================================================
   # Linux Build — CPU backend
@@ -196,6 +205,6 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            vessel-windows-amd64/vessel-windows-amd64.exe
+            vessel-windows-amd64/vessel-windows-amd64.zip
             vessel-linux-amd64/vessel-linux-amd64
             vessel-macos-arm64/vessel-macos-arm64

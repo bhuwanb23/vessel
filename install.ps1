@@ -8,19 +8,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Repo = "bhuwanb23/vessel"
-$BinaryName = "vessel.exe"
 
 # --- Helper functions ---
-function Info($msg)  { Write-Host "  `u{25B8} $msg" -ForegroundColor Cyan }
-function Ok($msg)    { Write-Host "  `u{2714} $msg" -ForegroundColor Green }
-function Warn($msg)  { Write-Host "  `u{26A0} $msg" -ForegroundColor Yellow }
-function Err($msg)   { Write-Host "  `u{2716} $msg" -ForegroundColor Red; exit 1 }
+function Info($msg)  { Write-Host "  >> $msg" -ForegroundColor Cyan }
+function Ok($msg)    { Write-Host "  OK $msg" -ForegroundColor Green }
+function Warn($msg)  { Write-Host "  !! $msg" -ForegroundColor Yellow }
+function Err($msg)   { Write-Host "  XX $msg" -ForegroundColor Red; exit 1 }
 
 # --- Banner ---
 Write-Host ""
-Write-Host "  `u{2554}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2557}" -ForegroundColor Cyan
-Write-Host "  `u{2551}     Vessel `u{2014} Windows Installer     `u{2551}" -ForegroundColor Cyan
-Write-Host "  `u{255A}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{2550}`u{255D}" -ForegroundColor Cyan
+Write-Host "  ================================"
+Write-Host "    Vessel - Windows Installer"
+Write-Host "  ================================"
 Write-Host ""
 
 # --- Get latest version ---
@@ -38,49 +37,83 @@ try {
 }
 Info "Latest version: $version"
 
-# --- Download ---
-$assetName = "vessel-windows-amd64.exe"
-$url = "https://github.com/$Repo/releases/download/$version/$assetName"
-$tmpFile = Join-Path $env:TEMP "vessel-install.exe"
+# --- Download zip ---
+$url = "https://github.com/$Repo/releases/download/$version/vessel-windows-amd64.zip"
+$tmpZip = Join-Path $env:TEMP "vessel-install.zip"
+$tmpDir = Join-Path $env:TEMP "vessel-install"
 
-Info "Downloading $assetName..."
+Info "Downloading vessel-windows-amd64.zip..."
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $url -OutFile $tmpFile -UseBasicParsing
+    Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing
 } catch {
-    Err "Download failed. URL: $url"
+    # Fallback: try single exe (older releases)
+    $urlExe = "https://github.com/$Repo/releases/download/$version/vessel-windows-amd64.exe"
+    Info "Zip not found, trying single exe download..."
+    try {
+        $target = Join-Path $InstallDir "vessel.exe"
+        if (!(Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
+        Invoke-WebRequest -Uri $urlExe -OutFile $target -UseBasicParsing
+        Ok "Installed vessel.exe to $target"
+        # Add to PATH
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath -notlike "*$InstallDir*") {
+            Info "Adding $InstallDir to user PATH..."
+            [Environment]::SetEnvironmentVariable("Path", "$userPath;$InstallDir", "User")
+            $env:Path = "$env:Path;$InstallDir"
+            Warn "Restart your terminal for PATH changes to take effect."
+        }
+        Write-Host ""
+        Ok "Quick start:"
+        Write-Host "  vessel --recommend"
+        Write-Host "  vessel --serve --models-dir ./models"
+        Write-Host ""
+        exit 0
+    } catch {
+        Err "Download failed. URL: $url"
+    }
 }
+
+# --- Extract ---
+Info "Extracting..."
+if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
+Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
 
 # --- Install ---
 Info "Installing to $InstallDir..."
-if (!(Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+if (!(Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
+
+# Copy all files from extracted dir
+Get-ChildItem -Path $tmpDir -Recurse -File | ForEach-Object {
+    $dest = Join-Path $InstallDir $_.Name
+    Copy-Item $_.FullName $dest -Force
 }
 
-$target = Join-Path $InstallDir $BinaryName
-Copy-Item $tmpFile $target -Force
-Remove-Item $tmpFile -Force
+# Cleanup
+Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
 
-# --- Add to PATH if needed ---
+# --- Add to PATH ---
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$InstallDir*") {
     Info "Adding $InstallDir to user PATH..."
     [Environment]::SetEnvironmentVariable("Path", "$userPath;$InstallDir", "User")
     $env:Path = "$env:Path;$InstallDir"
-    Warn "You may need to restart your terminal for PATH changes to take effect."
+    Warn "Restart your terminal for PATH changes to take effect."
 }
 
 # --- Verify ---
-if (Test-Path $target) {
-    Ok "Installed vessel to $target"
+$exe = Join-Path $InstallDir "vessel.exe"
+if (Test-Path $exe) {
+    Ok "Installed vessel to $exe"
     try {
-        $ver = & $target --version 2>$null
+        $ver = & $exe --version 2>$null
         Ok "Version: $ver"
     } catch {
         Ok "Binary installed successfully"
     }
 } else {
-    Err "Installation failed. Binary not found at $target"
+    Err "Installation failed. Binary not found at $exe"
 }
 
 # --- Done ---
