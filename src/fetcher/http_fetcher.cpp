@@ -1,5 +1,13 @@
 #include "http_fetcher.h"
 
+// Safety limit: abort if we receive more than this (prevents downloading full file)
+static constexpr uint64_t MAX_RANGE_RESPONSE = 256 * 1024;  // 256KB
+
+// =============================================================================
+// Windows implementation (WinHTTP)
+// =============================================================================
+#if defined(_WIN32)
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winhttp.h>
@@ -7,9 +15,6 @@
 #include <cstring>
 
 #pragma comment(lib, "winhttp.lib")
-
-// Safety limit: abort if we receive more than this (prevents downloading full file)
-static constexpr uint64_t MAX_RANGE_RESPONSE = 256 * 1024;  // 256KB
 
 // Helper: convert std::string URL to wide string
 static std::string wide_to_utf8(const wchar_t* wstr, int len) {
@@ -250,3 +255,115 @@ bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
     return true;
 }
+
+// =============================================================================
+// Linux/macOS implementation (libcurl)
+// =============================================================================
+#else
+
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <curl/curl.h>
+
+// libcurl write callback: appends data to a std::vector<uint8_t>
+static size_t curl_write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+    size_t total = size * nmemb;
+    auto* buffer = static_cast<std::vector<uint8_t>*>(userp);
+    size_t old_size = buffer->size();
+    buffer->resize(old_size + total);
+    memcpy(buffer->data() + old_size, contents, total);
+    return total;
+}
+
+bool fetch_range(const std::string& url, uint64_t range_end, std::vector<uint8_t>& output_buffer) {
+    output_buffer.clear();
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "Error: curl_easy_init() failed\n");
+        return false;
+    }
+
+    // Build Range header
+    char range_str[64];
+    snprintf(range_str, sizeof(range_str), "0-%llu", (unsigned long long)range_end);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_RANGE, range_str);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output_buffer);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);  // Follow redirects
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "Error: curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        curl_easy_cleanup(curl);
+        return false;
+    }
+
+    // Check HTTP status code (must be 206 for range request)
+    long status_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status_code);
+    curl_easy_cleanup(curl);
+
+    if (status_code != 206) {
+        fprintf(stderr, "Error: Expected HTTP 206 (Partial Content), got HTTP %ld\n", status_code);
+        if (status_code == 200) {
+            fprintf(stderr, "Server sent full file! Aborting to prevent downloading entire file.\n");
+        }
+        output_buffer.clear();
+        return false;
+    }
+
+    return true;
+}
+
+bool fetch_gguf_header(const std::string& url, std::vector<uint8_t>& output_buffer) {
+    // Fetch first 64KB — enough for all GGUF metadata
+    return fetch_range(url, 65535, output_buffer);
+}
+
+bool fetch_full(const std::string& url, std::vector<uint8_t>& output_buffer) {
+    output_buffer.clear();
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "Error: curl_easy_init() failed\n");
+        return false;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output_buffer);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "[fetch_full] curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+        curl_easy_cleanup(curl);
+        return false;
+    }
+
+    long status_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status_code);
+    curl_easy_cleanup(curl);
+
+    if (status_code != 200) {
+        fprintf(stderr, "Error: HTTP %ld (expected 200)\n", status_code);
+        output_buffer.clear();
+        return false;
+    }
+
+    return true;
+}
+
+#endif // _WIN32

@@ -122,12 +122,24 @@ set(PLATFORM_SOURCES
     src/platform/cpu_profiler.cpp
     src/platform/platform_factory.cpp
     include/nvml_loader.cpp
+    src/platform/nvidia_executor.cpp
 )
 
 if(PLATFORM_WINDOWS)
     list(APPEND PLATFORM_SOURCES
         src/platform/nvidia_profiler.cpp
-        src/platform/nvidia_executor.cpp
+    )
+endif()
+
+if(PLATFORM_LINUX)
+    list(APPEND PLATFORM_SOURCES
+        src/platform/amd_executor.cpp
+    )
+endif()
+
+if(PLATFORM_MACOS)
+    list(APPEND PLATFORM_SOURCES
+        src/platform/apple_executor.cpp
     )
 endif()
 
@@ -160,12 +172,13 @@ set(SHARED_LINK_DIRS
     ${LLAMA_BUILD}/src
     ${LLAMA_BUILD}/ggml/src
     ${LLAMA_BUILD}/bin
-    ${CUDAToolkit_LIBRARY_DIR}
-    "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9/lib/x64"
 )
 
 if(HAS_CUDA)
     list(APPEND SHARED_LINK_DIRS ${LLAMA_BUILD}/ggml/src/ggml-cuda)
+    if(CUDAToolkit_LIBRARY_DIR)
+        list(APPEND SHARED_LINK_DIRS ${CUDAToolkit_LIBRARY_DIR})
+    endif()
 endif()
 
 # ============================================
@@ -366,6 +379,7 @@ add_executable(step11_test
     src/platform/step11_validation.cpp
     src/platform/platform_factory.cpp
     src/platform/cpu_profiler.cpp
+    src/platform/nvidia_executor.cpp
     src/predictor/predictor.cpp
     src/predictor/speed_predictor.cpp
     src/predictor/memory_predictor.cpp
@@ -380,9 +394,16 @@ add_executable(step11_test
 if(PLATFORM_WINDOWS)
     list(APPEND step11_test_SOURCES
         src/platform/nvidia_profiler.cpp
-        src/platform/nvidia_executor.cpp
     )
     target_sources(step11_test PRIVATE ${step11_test_SOURCES})
+endif()
+
+if(PLATFORM_LINUX)
+    target_sources(step11_test PRIVATE src/platform/amd_executor.cpp)
+endif()
+
+if(PLATFORM_MACOS)
+    target_sources(step11_test PRIVATE src/platform/apple_executor.cpp)
 endif()
 
 target_include_directories(step11_test PRIVATE

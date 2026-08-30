@@ -209,7 +209,7 @@ std::unique_ptr<IExecutionBackend> create_platform_backend() {
 // These are separate definitions that return nullptr.
 // =============================================================================
 
-#if !defined(GGML_CUDA)
+#if !defined(GGML_CUDA) && !defined(GGML_HIPBLAS) && !defined(GGML_METAL)
 std::unique_ptr<IExecutionBackend> create_platform_backend(ComputeBackend) {
     return nullptr;
 }

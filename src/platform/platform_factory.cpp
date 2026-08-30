@@ -343,15 +343,22 @@ std::vector<GpuInfo> enumerate_gpus() {
 
 // Forward declarations of platform-specific factory functions
 // (defined in nvidia_profiler.cpp, cpu_profiler.cpp, etc.)
-extern std::unique_ptr<IHardwareProfiler> create_nvidia_profiler();
 extern std::unique_ptr<IHardwareProfiler> create_cpu_profiler();
+
+#if defined(_WIN32)
+extern std::unique_ptr<IHardwareProfiler> create_nvidia_profiler();
+#endif
 
 std::unique_ptr<IHardwareProfiler> create_platform_profiler(Platform platform) {
     switch (platform) {
         case Platform::NVIDIA_WINDOWS:
         case Platform::NVIDIA_LINUX: {
+#if defined(_WIN32)
             auto p = create_nvidia_profiler();
             if (p && p->isAvailable()) return p;
+#else
+            fprintf(stderr, "[PlatformFactory] NVIDIA profiler not available on this platform\n");
+#endif
             break;
         }
         case Platform::CPU_ONLY: {

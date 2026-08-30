@@ -1632,4 +1632,33 @@ DownloadResult download_model_file(const std::string&, const std::string&, uint6
     return r;
 }
 
+PreDownloadCheck pre_download_check(const std::string& url,
+                                     const ModelSpec& model,
+                                     const std::string& download_dir) {
+    PreDownloadCheck result;
+    result.pass = false;
+    result.error_message = "Download not yet supported on this platform.";
+    return result;
+}
+
+HashVerifyResult verify_file_integrity(const std::string&, const std::string&) {
+    HashVerifyResult r;
+    r.available = false;
+    r.error = "Hash verification not supported on this platform.";
+    return r;
+}
+
+bool is_shard_filename(const std::string&, int&, int&) { return false; }
+std::string shard_base_name(const std::string&) { return ""; }
+
+ModelShards detect_model_shards(const std::string&) {
+    ModelShards r;
+    r.error_message = "Shard detection not supported on this platform.";
+    return r;
+}
+
+bool all_shards_present(const ModelShards&, const std::string&) { return false; }
+std::string get_first_shard_path(const ModelShards&, const std::string&) { return ""; }
+bool download_all_shards(ModelShards&, const std::string&, std::atomic<bool>&, bool) { return false; }
+
 #endif // _WIN32

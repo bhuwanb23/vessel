@@ -14,8 +14,19 @@
 
 #include "platform/hardware_profiler_interface.h"
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <mach/mach.h>
+#include <unistd.h>
+#else
+#include <fstream>
+#include <unistd.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -23,7 +34,8 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
-#include <psapi.h>
+#include <vector>
+#include <string>
 
 // =============================================================================
 // CPU-Only Profiler Class
@@ -76,13 +88,9 @@ public:
         spec.gpu_compute_major = 0;
         spec.gpu_compute_minor = 0;
         
-        // RAM (Windows API)
-        MEMORYSTATUSEX mem_status;
-        mem_status.dwLength = sizeof(mem_status);
-        if (GlobalMemoryStatusEx(&mem_status)) {
-            spec.ram_total_bytes = mem_status.ullTotalPhys;
-            spec.ram_free_bytes = mem_status.ullAvailPhys;
-        }
+        // RAM (platform-specific)
+        spec.ram_total_bytes = get_ram_total();
+        spec.ram_free_bytes = get_ram_free();
         
         // Estimate RAM bandwidth from CPU model
         spec.ram_bandwidth_gbs = estimate_ram_bandwidth();
@@ -135,26 +143,83 @@ private:
     bool initialized_;
     
     // =========================================================================
+    // RAM Profiling (Cross-Platform)
+    // =========================================================================
+    
+    uint64_t get_ram_total() {
+#if defined(_WIN32)
+        MEMORYSTATUSEX mem_status;
+        mem_status.dwLength = sizeof(mem_status);
+        if (GlobalMemoryStatusEx(&mem_status)) {
+            return mem_status.ullTotalPhys;
+        }
+        return 0;
+#elif defined(__APPLE__)
+        uint64_t total_mem = 0;
+        size_t size = sizeof(total_mem);
+        if (sysctlbyname("hw.memsize", &total_mem, &size, NULL, 0) == 0) {
+            return total_mem;
+        }
+        return 0;
+#else
+        // Linux: read /proc/meminfo
+        std::ifstream meminfo("/proc/meminfo");
+        std::string line;
+        while (std::getline(meminfo, line)) {
+            uint64_t total_kb = 0;
+            if (sscanf(line.c_str(), "MemTotal: %lu kB", &total_kb) == 1) {
+                return total_kb * 1024ULL;
+            }
+        }
+        return 0;
+#endif
+    }
+    
+    uint64_t get_ram_free() {
+#if defined(_WIN32)
+        MEMORYSTATUSEX mem_status;
+        mem_status.dwLength = sizeof(mem_status);
+        if (GlobalMemoryStatusEx(&mem_status)) {
+            return mem_status.ullAvailPhys;
+        }
+        return 0;
+#elif defined(__APPLE__)
+        mach_port_t host = mach_host_self();
+        vm_statistics64_data_t vm_stats;
+        mach_msg_type_number_t info_count = HOST_VM_INFO64_COUNT;
+        if (host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vm_stats, &info_count) == KERN_SUCCESS) {
+            uint64_t page_size = 0;
+            size_t size = sizeof(page_size);
+            sysctlbyname("hw.pagesize", &page_size, &size, NULL, 0);
+            return (uint64_t)(vm_stats.free_count + vm_stats.inactive_count) * page_size;
+        }
+        return 0;
+#else
+        // Linux: read /proc/meminfo
+        std::ifstream meminfo("/proc/meminfo");
+        std::string line;
+        while (std::getline(meminfo, line)) {
+            uint64_t avail_kb = 0;
+            if (sscanf(line.c_str(), "MemAvailable: %lu kB", &avail_kb) == 1) {
+                return avail_kb * 1024ULL;
+            }
+        }
+        return 0;
+#endif
+    }
+    
+    // =========================================================================
     // RAM Bandwidth Estimation
     // =========================================================================
     
     double estimate_ram_bandwidth() {
-        // Try to detect RAM type from Windows
-        // DDR4-3200: ~25 GB/s theoretical, ~20 GB/s achievable
-        // DDR5-5600: ~45 GB/s theoretical, ~35 GB/s achievable
-        // DDR5-6400: ~51 GB/s theoretical, ~40 GB/s achievable
-        
-        // For now, return a conservative estimate
-        // The actual bandwidth should be measured via memcpy benchmark
-        // but that requires a model path for the test file
-        
-        // Check if we have DDR5 (Windows 10 1903+ reports this)
-        // For now, assume DDR4-3200 (most common)
-        return 35.0;  // Conservative estimate for DDR4
+        // Conservative estimate for DDR4-3200
+        // Real measurement would require a memcpy benchmark
+        return 35.0;
     }
     
     // =========================================================================
-    // Disk I/O Measurement
+    // Disk I/O Measurement (Cross-Platform)
     // =========================================================================
     
     double measure_disk_sequential(const std::string& file_path) {
@@ -211,6 +276,7 @@ private:
         
         auto start = std::chrono::high_resolution_clock::now();
         
+#if defined(_WIN32)
         HANDLE hFile = CreateFileA(test_file.c_str(), GENERIC_READ, FILE_SHARE_READ,
                                    NULL, OPEN_EXISTING, 0, NULL);
         if (hFile == INVALID_HANDLE_VALUE) {
@@ -233,6 +299,25 @@ private:
         }
         
         CloseHandle(hFile);
+#else
+        // Unix: use pread for random reads
+        int fd = open(test_file.c_str(), O_RDONLY);
+        if (fd < 0) {
+            if (created) std::filesystem::remove(test_file);
+            return 0.0;
+        }
+        
+        char buffer[4096];
+        int num_reads = 1000;
+        uint64_t file_size = std::filesystem::file_size(test_file);
+        
+        for (int i = 0; i < num_reads; i++) {
+            uint64_t offset = (static_cast<uint64_t>(rand()) * 4096) % (file_size - 4096);
+            pread(fd, buffer, 4096, offset);
+        }
+        
+        close(fd);
+#endif
         
         auto end = std::chrono::high_resolution_clock::now();
         double seconds = std::chrono::duration<double>(end - start).count();
@@ -243,12 +328,11 @@ private:
     }
     
     // =========================================================================
-    // Fingerprint Generation
+    // Fingerprint Generation (Cross-Platform)
     // =========================================================================
     
-    std::string generate_fingerprint(const HardwareSpec& spec) {
-        // CPU-only fingerprint: CPU model + RAM (rounded to GB)
-        // Get CPU name from Windows registry
+    std::string get_cpu_model() {
+#if defined(_WIN32)
         char cpu_name[256] = "Unknown CPU";
         HKEY hKey;
         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -259,32 +343,54 @@ private:
                             (LPBYTE)cpu_name, &size);
             RegCloseKey(hKey);
         }
+        return cpu_name;
+#elif defined(__APPLE__)
+        char buf[256] = "Unknown CPU";
+        size_t size = sizeof(buf);
+        sysctlbyname("machdep.cpu.brand_string", buf, &size, NULL, 0);
+        return buf;
+#else
+        // Linux: read /proc/cpuinfo
+        std::ifstream cpuinfo("/proc/cpuinfo");
+        std::string line;
+        while (std::getline(cpuinfo, line)) {
+            if (line.find("model name") != std::string::npos) {
+                size_t pos = line.find(": ");
+                if (pos != std::string::npos) {
+                    return line.substr(pos + 2);
+                }
+            }
+        }
+        return "Unknown CPU";
+#endif
+    }
+    
+    std::string generate_fingerprint(const HardwareSpec& spec) {
+        std::string cpu = get_cpu_model();
         
-        // Normalize CPU name: strip clock speed and "CPU" suffix
-        std::string normalized = cpu_name;
-        // Remove "(R)" and "(TM)"
-        auto remove_parens = [&](const std::string& pattern) {
+        // Normalize CPU name: strip clock speed and common suffixes
+        auto remove_pattern = [&](const std::string& pattern) {
             size_t pos;
-            while ((pos = normalized.find(pattern)) != std::string::npos) {
-                normalized.erase(pos, pattern.length());
+            while ((pos = cpu.find(pattern)) != std::string::npos) {
+                cpu.erase(pos, pattern.length());
             }
         };
-        remove_parens("(R)");
-        remove_parens("(TM)");
-        remove_parens("@");
+        remove_pattern("(R)");
+        remove_pattern("(TM)");
+        remove_pattern("CPU");
         
         // Strip everything after " @ " (clock speed)
-        size_t at_pos = normalized.find("@");
+        size_t at_pos = cpu.find("@");
         if (at_pos != std::string::npos) {
-            normalized = normalized.substr(0, at_pos);
+            cpu = cpu.substr(0, at_pos);
         }
         
         // Trim whitespace
-        while (!normalized.empty() && normalized.back() == ' ') normalized.pop_back();
-        while (!normalized.empty() && normalized.front() == ' ') normalized.erase(0, 1);
+        while (!cpu.empty() && cpu.back() == ' ') cpu.pop_back();
+        while (!cpu.empty() && cpu.front() == ' ') cpu.erase(0, 1);
         
         uint64_t ram_gb = (spec.ram_total_bytes + 512ULL * 1024 * 1024) / (1024ULL * 1024 * 1024);
-        return normalized + "|" + std::to_string(ram_gb) + "GB";
+        return cpu + "|" + std::to_string(ram_gb) + "GB";
     }
 };
 
