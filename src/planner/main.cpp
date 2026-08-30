@@ -30,6 +30,7 @@
 #include "recommend/catalog_loader.h"
 #include "recommend/recommendation_engine.h"
 #include "web_server.h"
+#include "api_server.h"
 
 #include <cstdio>
 #include <string>
@@ -83,9 +84,12 @@ int main(int argc, char* argv[]) {
     int gpu_index            = -1;     // --gpu: select specific GPU by index
     std::string gpu_name_pattern;      // --gpu-name: select GPU by name pattern
     bool serve_ui            = false;  // --serve-ui: start web dashboard
+    bool serve_api            = false;  // --serve: start OpenAI-compatible API server
     bool no_browser           = false;  // --no-browser: don't auto-open browser
-    int  ui_port              = 8080;   // --port: dashboard port
+    int  ui_port              = 8080;   // --port: dashboard/api port
+    int  api_port             = 11434;  // --api-port: API server port (default 11434)
     std::string bind_address  = "127.0.0.1"; // --bind: address to bind to (default localhost)
+    std::vector<std::string> model_dirs;     // --models-dir: directories to scan for .gguf files
     bool recommend_mode      = false;  // --recommend: show model recommendations
     std::string use_case     = "all";  // --use-case: filter by use case
     int top_n                = 8;      // --top: number of recommendations to show
@@ -221,6 +225,13 @@ int main(int argc, char* argv[]) {
             if (gpu_index < 0) gpu_index = -1;
         } else if (arg == "--gpu-name" && i + 1 < argc) {
             gpu_name_pattern = argv[++i];
+        } else if (arg == "--serve") {
+            serve_api = true;
+        } else if (arg == "--api-port" && i + 1 < argc) {
+            api_port = atoi(argv[++i]);
+            if (api_port < 1024 || api_port > 65535) api_port = 11434;
+        } else if (arg == "--models-dir" && i + 1 < argc) {
+            model_dirs.push_back(argv[++i]);
         } else if (arg == "--serve-ui") {
             serve_ui = true;
         } else if (arg == "--no-browser") {
@@ -249,6 +260,19 @@ int main(int argc, char* argv[]) {
             model_url = arg;
             model_specified = true;
         }
+    }
+
+    // --serve: Start OpenAI-compatible API server and exit
+    if (serve_api) {
+        // Default model directories if none specified
+        if (model_dirs.empty()) {
+            model_dirs = {"models", "../models", "./models"};
+#ifdef _WIN32
+            model_dirs.push_back("C:/dev/models");
+            model_dirs.push_back("C:/models");
+#endif
+        }
+        return start_api_server(api_port, bind_address, model_dirs) ? 0 : 1;
     }
 
     // --serve-ui: Start web dashboard and exit

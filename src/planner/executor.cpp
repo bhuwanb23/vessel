@@ -605,3 +605,135 @@ ExecutionResult execute_moe(const std::string& model_path,
     result.success = true;
     return result;
 }
+
+// =============================================================================
+// Step 14: Streaming Inference (for API Server)
+// =============================================================================
+// Uses pre-loaded model+context. Clears KV cache, tokenizes,
+// prefills, then decodes one token at a time with callback.
+// =============================================================================
+
+bool execute_streaming(
+    struct llama_model* model,
+    struct llama_context* ctx,
+    const std::string& formatted_prompt,
+    const StreamingConfig& config,
+    StreamCallbacks callbacks) {
+
+    if (!model || !ctx) {
+        if (callbacks.on_error) callbacks.on_error("Model or context is null");
+        return false;
+    }
+
+    if (formatted_prompt.empty()) {
+        if (callbacks.on_error) callbacks.on_error("Prompt is empty");
+        return false;
+    }
+
+    // Clear KV cache for this request
+    llama_memory_clear(llama_get_memory(ctx), true);
+
+    // Tokenize prompt
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+    std::vector<llama_token> tokens(formatted_prompt.size() + 32);
+
+    int32_t n_tokens = llama_tokenize(
+        vocab, formatted_prompt.c_str(), static_cast<int32_t>(formatted_prompt.size()),
+        tokens.data(), static_cast<int32_t>(tokens.size()),
+        true,   // add_special
+        true);  // parse_special
+
+    if (n_tokens < 0) {
+        if (callbacks.on_error) callbacks.on_error("Failed to tokenize prompt (error: " + std::to_string(n_tokens) + ")");
+        return false;
+    }
+
+    if (n_tokens == 0) {
+        if (callbacks.on_error) callbacks.on_error("Prompt tokenized to 0 tokens");
+        return false;
+    }
+
+    tokens.resize(n_tokens);
+
+    // Prefill
+    llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
+    if (llama_decode(ctx, batch) != 0) {
+        if (callbacks.on_error) callbacks.on_error("Failed to decode prompt (" + std::to_string(n_tokens) + " tokens). CUDA OOM or compute buffer too small.");
+        return false;
+    }
+
+    // Build sampler chain
+    llama_sampler* smpl = build_sampler_chain(config.sampling);
+
+    // Decode loop
+    std::vector<llama_token> generated;
+    llama_token new_token;
+    int max_tokens = config.max_tokens;
+    std::string generated_text;
+    bool stopped = false;
+
+    for (int i = 0; i < max_tokens; i++) {
+        // Check for abort
+        if (is_abort_requested()) break;
+
+        // Sample next token
+        new_token = llama_sampler_sample(smpl, ctx, -1);
+
+        // Check for end of generation
+        if (llama_vocab_is_eog(vocab, new_token)) {
+            stopped = true;
+            break;
+        }
+
+        generated.push_back(new_token);
+
+        // Convert token to text
+        char buf[256];
+        int n = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+        std::string token_text;
+        if (n > 0) {
+            token_text.assign(buf, n);
+            generated_text += token_text;
+        }
+
+        // Call streaming callback
+        if (callbacks.on_token && !token_text.empty()) {
+            callbacks.on_token(token_text);
+        }
+
+        // Check stop sequences
+        if (!config.sampling.stop_sequences.empty()) {
+            for (const auto& stop : config.sampling.stop_sequences) {
+                if (generated_text.size() >= stop.size()) {
+                    if (generated_text.compare(
+                            generated_text.size() - stop.size(),
+                            stop.size(), stop) == 0) {
+                        stopped = true;
+                        break;
+                    }
+                }
+            }
+            if (stopped) break;
+        }
+
+        // Feed token back for next iteration
+        llama_batch decode_batch = llama_batch_get_one(&new_token, 1);
+        if (llama_decode(ctx, decode_batch) != 0) {
+            if (callbacks.on_error) callbacks.on_error("Failed to decode token at step " + std::to_string(i));
+            llama_sampler_free(smpl);
+            return false;
+        }
+    }
+
+    llama_sampler_free(smpl);
+
+    // Determine finish reason
+    std::string finish_reason = stopped ? "stop" : "length";
+
+    // Report completion
+    if (callbacks.on_done) {
+        callbacks.on_done(finish_reason, n_tokens, static_cast<int>(generated.size()));
+    }
+
+    return true;
+}
