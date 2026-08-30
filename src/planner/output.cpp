@@ -808,6 +808,9 @@ void print_usage() {
     printf("  --max-download <GB>                 Max download size in GB (e.g., 5)\n");
     printf("  --top <N>                           Number of recommendations to show (default: 8)\n");
     printf("  --catalog <path>                    Path to custom catalog JSON file\n");
+    printf("  --serve                             Start OpenAI-compatible API server (port 11434)\n");
+    printf("  --api-port <port>                   API server port (default: 11434)\n");
+    printf("  --models-dir <path>                 Directory to scan for .gguf models (repeatable)\n");
     printf("  --serve-ui                          Start web dashboard (localhost:8080)\n");
     printf("  --port <port>                       Dashboard port (default: 8080)\n");
     printf("  --bind <addr>                       Bind address (default: 127.0.0.1)\n");
@@ -829,4 +832,7 @@ void print_usage() {
     printf("  vessel --recommend --max-download 5      # Best model under 5GB\n");
     printf("  vessel --recommend --top 3               # Show top 3 only\n");
     printf("  vessel --recommend --catalog my.json     # Use custom catalog\n");
+    printf("  vessel --serve                           # Start OpenAI-compatible API server\n");
+    printf("  vessel --serve --models-dir ./models     # Scan specific directory\n");
+    printf("  vessel --serve --api-port 8080           # Custom port\n");
 }

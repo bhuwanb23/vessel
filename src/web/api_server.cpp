@@ -10,6 +10,7 @@
 #include "executor.h"
 #include "types.h"
 #include "profiler.h"
+#include "matrix.h"
 
 #include <cstdio>
 #include <string>
