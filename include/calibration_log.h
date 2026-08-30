@@ -1,10 +1,14 @@
 #pragma once
 
 #include "types.h"
-#include "executor.h"
 #include <string>
 #include <vector>
 #include <cstdint>
+
+// Forward declaration — ExecutionResult is defined in executor.h.
+// We only need it by reference here, avoiding a transitive #include <llama.h>
+// which would break targets that don't link llama.cpp (e.g. predictor_test).
+struct ExecutionResult;
 
 // =============================================================================
 // Calibration Log — Step 7
