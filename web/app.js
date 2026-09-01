@@ -20,6 +20,25 @@ const state = {
     recommendData: [],
 };
 
+// Chart instances (so we can destroy/recreate)
+const charts = {
+    vramHistory: null,
+    tempHistory: null,
+    modelCompare: null,
+    strategySpeed: null,
+    strategyVram: null,
+    recScatter: null,
+    calScatter: null,
+    calAccuracy: null,
+};
+
+// Time-series buffers for live charts
+const timeSeries = {
+    vram: [],
+    temp: [],
+    labels: [],
+};
+
 // =========================================================================
 // API Client
 // =========================================================================
@@ -51,7 +70,6 @@ const api = {
     async recommend(priority, useCase) {
         return this.get(`/api/recommend?priority=${priority}&use_case=${useCase}&top=8`);
     },
-    async getCatalog() { return this.get('/api/catalog'); },
     async getLocalModels() { return this.get('/api/models/local'); },
     async getCalibration() { return this.get('/api/calibration'); },
     async getCalHistory() { return this.get('/api/calibration/history'); },
@@ -85,8 +103,46 @@ function fmtBytes(b) {
     return b + ' B';
 }
 
-function fmtGB(bytes) {
-    return (bytes / 1e9).toFixed(1);
+function chartColors() {
+    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return {
+        isDark,
+        text: isDark ? '#94a3b8' : '#475569',
+        grid: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+        surface: isDark ? 'rgba(17,24,39,0.6)' : 'rgba(255,255,255,0.7)',
+        accent: isDark ? '#63b3ff' : '#2563eb',
+        green: isDark ? '#4ade80' : '#16a34a',
+        yellow: isDark ? '#fbbf24' : '#d97706',
+        red: isDark ? '#f87171' : '#dc2626',
+        purple: isDark ? '#a78bfa' : '#7c3aed',
+        cyan: isDark ? '#22d3ee' : '#0891b2',
+    };
+}
+
+function chartDefaults() {
+    const c = chartColors();
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                backgroundColor: c.isDark ? '#1a2236' : '#ffffff',
+                titleColor: c.isDark ? '#f0f4f8' : '#0f172a',
+                bodyColor: c.text,
+                borderColor: c.grid,
+                borderWidth: 1,
+                padding: 10,
+                titleFont: { family: 'Plus Jakarta Sans', weight: '600' },
+                bodyFont: { family: 'JetBrains Mono', size: 12 },
+                cornerRadius: 8,
+            },
+        },
+        scales: {
+            x: { grid: { color: c.grid, drawBorder: false }, ticks: { color: c.text, font: { family: 'Plus Jakarta Sans', size: 11 } } },
+            y: { grid: { color: c.grid, drawBorder: false }, ticks: { color: c.text, font: { family: 'Plus Jakarta Sans', size: 11 } } },
+        },
+    };
 }
 
 // =========================================================================
@@ -117,8 +173,6 @@ function navigate(viewName) {
         case 'models': loadLocalModels(); break;
         case 'calibration': loadCalibration(); break;
     }
-
-    // Close mobile sidebar
     document.getElementById('sidebar').classList.remove('open');
 }
 
@@ -136,7 +190,7 @@ document.addEventListener('click', e => {
 });
 
 // =========================================================================
-// MOCK DATA
+// MOCK DATA — Rich & Realistic
 // =========================================================================
 const MockData = {
     hardware() {
@@ -176,16 +230,6 @@ const MockData = {
     },
 
     predict() {
-        const strategies = [
-            { rank: 1, placement: 'FULL_GPU', gpu_layers: 81, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 142, vram_bytes: 12.8e9, ram_bytes: 0, ttft_ms: 12, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: [] },
-            { rank: 2, placement: 'FULL_GPU', gpu_layers: 81, context_length: 65536, kv_quant_bits: 8, tokens_per_sec: 128, vram_bytes: 18.2e9, ram_bytes: 0, ttft_ms: 18, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: [] },
-            { rank: 3, placement: 'GPU_CPU_SPLIT', gpu_layers: 45, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 67, vram_bytes: 8.1e9, ram_bytes: 4.2e9, ttft_ms: 35, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: [] },
-            { rank: 4, placement: 'FULL_GPU', gpu_layers: 81, context_length: 131072, kv_quant_bits: 8, tokens_per_sec: 89, vram_bytes: 22.1e9, ram_bytes: 0, ttft_ms: 28, viable: true, confidence: 'MEDIUM', status: 'TIGHT', warnings: ['High VRAM usage — monitor temperature'] },
-            { rank: 5, placement: 'GPU_CPU_SPLIT', gpu_layers: 30, context_length: 65536, kv_quant_bits: 8, tokens_per_sec: 45, vram_bytes: 5.8e9, ram_bytes: 6.8e9, ttft_ms: 52, viable: true, confidence: 'MEDIUM', status: 'VIABLE', warnings: [] },
-            { rank: 6, placement: 'CPU_ONLY', gpu_layers: 0, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 8, vram_bytes: 0, ram_bytes: 12.8e9, ttft_ms: 450, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: ['Slow — consider GPU options'] },
-            { rank: 7, placement: 'LAYER_STREAM', gpu_layers: 81, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 22, vram_bytes: 2.1e9, ram_bytes: 10.2e9, ttft_ms: 180, viable: true, confidence: 'LOW', status: 'VIABLE', warnings: ['Experimental — layer streaming'] },
-            { rank: 8, placement: 'HOT_COLD_SPLIT', gpu_layers: 81, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 95, vram_bytes: 10.5e9, ram_bytes: 3.8e9, ttft_ms: 22, viable: true, confidence: 'MEDIUM', status: 'VIABLE', warnings: ['Requires neuron profiling data'] },
-        ];
         return {
             model: {
                 name: 'Qwen2.5-14B-Instruct',
@@ -197,7 +241,16 @@ const MockData = {
                 context: 32768,
             },
             hardware: this.hardware(),
-            strategies,
+            strategies: [
+                { rank: 1, placement: 'FULL_GPU', gpu_layers: 81, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 142, vram_bytes: 12.8e9, ram_bytes: 0, ttft_ms: 12, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: [] },
+                { rank: 2, placement: 'FULL_GPU', gpu_layers: 81, context_length: 65536, kv_quant_bits: 8, tokens_per_sec: 128, vram_bytes: 18.2e9, ram_bytes: 0, ttft_ms: 18, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: [] },
+                { rank: 3, placement: 'GPU_CPU_SPLIT', gpu_layers: 45, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 67, vram_bytes: 8.1e9, ram_bytes: 4.2e9, ttft_ms: 35, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: [] },
+                { rank: 4, placement: 'FULL_GPU', gpu_layers: 81, context_length: 131072, kv_quant_bits: 8, tokens_per_sec: 89, vram_bytes: 22.1e9, ram_bytes: 0, ttft_ms: 28, viable: true, confidence: 'MEDIUM', status: 'TIGHT', warnings: ['High VRAM usage'] },
+                { rank: 5, placement: 'GPU_CPU_SPLIT', gpu_layers: 30, context_length: 65536, kv_quant_bits: 8, tokens_per_sec: 45, vram_bytes: 5.8e9, ram_bytes: 6.8e9, ttft_ms: 52, viable: true, confidence: 'MEDIUM', status: 'VIABLE', warnings: [] },
+                { rank: 6, placement: 'CPU_ONLY', gpu_layers: 0, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 8, vram_bytes: 0, ram_bytes: 12.8e9, ttft_ms: 450, viable: true, confidence: 'HIGH', status: 'VIABLE', warnings: ['Slow'] },
+                { rank: 7, placement: 'LAYER_STREAM', gpu_layers: 81, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 22, vram_bytes: 2.1e9, ram_bytes: 10.2e9, ttft_ms: 180, viable: true, confidence: 'LOW', status: 'VIABLE', warnings: ['Experimental'] },
+                { rank: 8, placement: 'HOT_COLD_SPLIT', gpu_layers: 81, context_length: 32768, kv_quant_bits: 8, tokens_per_sec: 95, vram_bytes: 10.5e9, ram_bytes: 3.8e9, ttft_ms: 22, viable: true, confidence: 'MEDIUM', status: 'VIABLE', warnings: [] },
+            ],
             time_ms: 342,
         };
     },
@@ -205,14 +258,14 @@ const MockData = {
     recommendations() {
         return {
             recommendations: [
-                { model: 'Qwen2.5-14B-Instruct', quant: 'Q4_K_M', download_gb: 8.9, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 142, vram_bytes: 12.8e9, hf_url: 'https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf', label: 'Best Overall' },
-                { model: 'Mistral-7B-Instruct-v0.3', quant: 'Q4_K_M', download_gb: 4.4, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 198, vram_bytes: 6.2e9, hf_url: 'https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/mistral-7b-instruct-v0.3.Q4_K_M.gguf', label: 'Fastest' },
-                { model: 'Llama-3.1-8B-Instruct', quant: 'Q4_K_M', download_gb: 4.9, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 185, vram_bytes: 6.8e9, hf_url: 'https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf', label: null },
-                { model: 'DeepSeek-Coder-V2-Lite', quant: 'Q4_K_M', download_gb: 9.0, quality_stars: '★★★★★', strategy: 'GPU+CPU Split', tokens_per_sec: 88, vram_bytes: 9.2e9, hf_url: 'https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/main/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf', label: 'Best for Code' },
-                { model: 'Phi-3-medium-14b', quant: 'Q4_K_M', download_gb: 8.0, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 135, vram_bytes: 11.2e9, hf_url: 'https://huggingface.co/bartowski/Phi-3-medium-128k-instruct-GGUF/resolve/main/Phi-3-medium-128k-instruct-Q4_K_M.gguf', label: null },
-                { model: 'Gemma-2-27b-it', quant: 'Q4_K_M', download_gb: 16.2, quality_stars: '★★★★★', strategy: 'GPU+CPU Split', tokens_per_sec: 72, vram_bytes: 14.8e9, hf_url: 'https://huggingface.co/bartowski/gemma-2-27b-it-GGUF/resolve/main/gemma-2-27b-it-Q4_K_M.gguf', label: 'Highest Quality' },
-                { model: 'Yi-1.5-9B-Chat', quant: 'Q4_K_M', download_gb: 5.4, quality_stars: '★★★☆☆', strategy: 'Full GPU', tokens_per_sec: 175, vram_bytes: 7.2e9, hf_url: 'https://huggingface.co/01-ai/Yi-1.5-9B-Chat-GGUF/resolve/main/yi-1.5-9b-chat-q4_k_m.gguf', label: null },
-                { model: 'Command-R-35B', quant: 'Q4_K_M', download_gb: 19.4, quality_stars: '★★★★☆', strategy: 'GPU+CPU Split', tokens_per_sec: 58, vram_bytes: 18.2e9, hf_url: 'https://huggingface.co/bartowski/Command-R-35B-GGUF/resolve/main/Command-R-35B-Q4_K_M.gguf', label: null },
+                { model: 'Qwen2.5-14B-Instruct', quant: 'Q4_K_M', download_gb: 8.9, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 142, vram_bytes: 12.8e9, hf_url: 'https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf', label: 'Best Overall', quality_score: 8.2 },
+                { model: 'Mistral-7B-Instruct-v0.3', quant: 'Q4_K_M', download_gb: 4.4, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 198, vram_bytes: 6.2e9, hf_url: 'https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/mistral-7b-instruct-v0.3.Q4_K_M.gguf', label: 'Fastest', quality_score: 7.5 },
+                { model: 'Llama-3.1-8B-Instruct', quant: 'Q4_K_M', download_gb: 4.9, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 185, vram_bytes: 6.8e9, hf_url: 'https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf', label: null, quality_score: 7.8 },
+                { model: 'DeepSeek-Coder-V2-Lite', quant: 'Q4_K_M', download_gb: 9.0, quality_stars: '★★★★★', strategy: 'GPU+CPU Split', tokens_per_sec: 88, vram_bytes: 9.2e9, hf_url: 'https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/main/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf', label: 'Best for Code', quality_score: 9.1 },
+                { model: 'Phi-3-medium-14b', quant: 'Q4_K_M', download_gb: 8.0, quality_stars: '★★★★☆', strategy: 'Full GPU', tokens_per_sec: 135, vram_bytes: 11.2e9, hf_url: 'https://huggingface.co/bartowski/Phi-3-medium-128k-instruct-GGUF/resolve/main/Phi-3-medium-128k-instruct-Q4_K_M.gguf', label: null, quality_score: 7.9 },
+                { model: 'Gemma-2-27b-it', quant: 'Q4_K_M', download_gb: 16.2, quality_stars: '★★★★★', strategy: 'GPU+CPU Split', tokens_per_sec: 72, vram_bytes: 14.8e9, hf_url: 'https://huggingface.co/bartowski/gemma-2-27b-it-GGUF/resolve/main/gemma-2-27b-it-Q4_K_M.gguf', label: 'Highest Quality', quality_score: 9.4 },
+                { model: 'Yi-1.5-9B-Chat', quant: 'Q4_K_M', download_gb: 5.4, quality_stars: '★★★☆☆', strategy: 'Full GPU', tokens_per_sec: 175, vram_bytes: 7.2e9, hf_url: 'https://huggingface.co/01-ai/Yi-1.5-9B-Chat-GGUF/resolve/main/yi-1.5-9b-chat-q4_k_m.gguf', label: null, quality_score: 6.8 },
+                { model: 'Command-R-35B', quant: 'Q4_K_M', download_gb: 19.4, quality_stars: '★★★★☆', strategy: 'GPU+CPU Split', tokens_per_sec: 58, vram_bytes: 18.2e9, hf_url: 'https://huggingface.co/bartowski/Command-R-35B-GGUF/resolve/main/Command-R-35B-Q4_K_M.gguf', label: null, quality_score: 8.5 },
             ],
         };
     },
@@ -229,11 +282,7 @@ const MockData = {
     },
 
     calibration() {
-        return {
-            records: 12,
-            matching_records: 12,
-            fingerprint: 'a1b2c3d4e5f6',
-        };
+        return { records: 12, matching_records: 12, fingerprint: 'a1b2c3d4e5f6' };
     },
 
     calibrationHistory() {
@@ -260,11 +309,9 @@ const MockData = {
 // Dashboard View
 // =========================================================================
 function updateDashboard(hw) {
-    // GPU name
     const gpuName = hw.gpu_name || 'CPU Only';
     document.getElementById('hero-gpu-name').textContent = gpuName;
-    document.getElementById('hero-gpu-detail').textContent =
-        hw.gpu_tflops_fp16 > 0 ? `${hw.gpu_tflops_fp16} TFLOPS` : 'Integrated';
+    document.getElementById('hero-gpu-detail').textContent = hw.gpu_tflops_fp16 > 0 ? `${hw.gpu_tflops_fp16} TFLOPS` : 'Integrated';
 
     // VRAM gauge
     const vramUsed = hw.vram_total_bytes - hw.vram_free_bytes;
@@ -305,6 +352,9 @@ function updateDashboard(hw) {
 
     // Sidebar status
     document.getElementById('hw-status-mini').querySelector('.hw-status-text').textContent = hw.gpu_name || 'CPU Only';
+
+    // Push to time-series
+    pushTimeSeries(vramUsed, temp);
 }
 
 async function loadHardware() {
@@ -335,7 +385,6 @@ function startHWSSE() {
     });
 }
 
-// Mock SSE simulation for live data
 function startMockSSE() {
     if (!USE_MOCK_DATA) return;
     setInterval(() => {
@@ -347,6 +396,133 @@ function startMockSSE() {
             updateDashboard(state.hardware);
         }
     }, 2000);
+}
+
+// =========================================================================
+// Charts — Dashboard
+// =========================================================================
+function pushTimeSeries(vramUsed, temp) {
+    const now = new Date();
+    const label = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    timeSeries.labels.push(label);
+    timeSeries.vram.push(parseFloat((vramUsed / 1e9).toFixed(1)));
+    timeSeries.temp.push(temp);
+    if (timeSeries.labels.length > 30) {
+        timeSeries.labels.shift();
+        timeSeries.vram.shift();
+        timeSeries.temp.shift();
+    }
+    renderDashboardCharts();
+}
+
+function renderDashboardCharts() {
+    const c = chartColors();
+    const defaults = chartDefaults();
+
+    // VRAM History
+    const vramEl = document.getElementById('chart-vram-history');
+    if (vramEl) {
+        if (charts.vramHistory) charts.vramHistory.destroy();
+        charts.vramHistory = new Chart(vramEl, {
+            type: 'line',
+            data: {
+                labels: timeSeries.labels,
+                datasets: [{
+                    label: 'VRAM Used (GB)',
+                    data: timeSeries.vram,
+                    borderColor: c.green,
+                    backgroundColor: c.isDark ? 'rgba(74,222,128,0.08)' : 'rgba(22,163,74,0.06)',
+                    fill: true,
+                    tension: 0.4,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                }],
+            },
+            options: {
+                ...defaults,
+                scales: {
+                    ...defaults.scales,
+                    y: { ...defaults.scales.y, min: 0, max: 24, ticks: { ...defaults.scales.y.ticks, callback: v => v + ' GB' } },
+                    x: { ...defaults.scales.x, ticks: { ...defaults.scales.x.ticks, maxTicksLimit: 6 } },
+                },
+                plugins: {
+                    ...defaults.plugins,
+                    tooltip: { ...defaults.plugins.tooltip, callbacks: { label: ctx => ctx.parsed.y.toFixed(1) + ' GB' } },
+                },
+            },
+        });
+    }
+
+    // Temperature History
+    const tempEl = document.getElementById('chart-temp-history');
+    if (tempEl) {
+        if (charts.tempHistory) charts.tempHistory.destroy();
+        const tempColor = timeSeries.temp.some(t => t > 75) ? c.red : c.yellow;
+        charts.tempHistory = new Chart(tempEl, {
+            type: 'line',
+            data: {
+                labels: timeSeries.labels,
+                datasets: [{
+                    label: 'Temperature (°C)',
+                    data: timeSeries.temp,
+                    borderColor: tempColor,
+                    backgroundColor: c.isDark ? 'rgba(251,191,36,0.08)' : 'rgba(217,119,6,0.06)',
+                    fill: true,
+                    tension: 0.4,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                }],
+            },
+            options: {
+                ...defaults,
+                scales: {
+                    ...defaults.scales,
+                    y: { ...defaults.scales.y, min: 30, max: 90, ticks: { ...defaults.scales.y.ticks, callback: v => v + '°' } },
+                    x: { ...defaults.scales.x, ticks: { ...defaults.scales.x.ticks, maxTicksLimit: 6 } },
+                },
+                plugins: {
+                    ...defaults.plugins,
+                    tooltip: { ...defaults.plugins.tooltip, callbacks: { label: ctx => ctx.parsed.y + '°C' } },
+                },
+            },
+        });
+    }
+
+    // Model Speed Comparison (bar chart)
+    if (!charts.modelCompare && document.getElementById('chart-model-compare')) {
+        const modelNames = ['Qwen2.5-14B', 'Mistral-7B', 'Llama-3.1-8B', 'DeepSeek-Coder', 'Phi-3-14B', 'Gemma-2-27B', 'Yi-1.5-9B', 'Command-R-35B'];
+        const speeds = [142, 198, 185, 88, 135, 72, 175, 58];
+        const barColors = speeds.map(s => s > 150 ? c.green : s > 100 ? c.accent : s > 70 ? c.yellow : c.red);
+        charts.modelCompare = new Chart(document.getElementById('chart-model-compare'), {
+            type: 'bar',
+            data: {
+                labels: modelNames,
+                datasets: [{
+                    label: 'tok/s',
+                    data: speeds,
+                    backgroundColor: barColors.map(col => col + '40'),
+                    borderColor: barColors,
+                    borderWidth: 1,
+                    borderRadius: 6,
+                    borderSkipped: false,
+                }],
+            },
+            options: {
+                ...defaults,
+                indexAxis: 'y',
+                scales: {
+                    x: { ...defaults.scales.x, ticks: { ...defaults.scales.x.ticks, callback: v => v + ' tok/s' } },
+                    y: { ...defaults.scales.y, ticks: { ...defaults.scales.y.ticks, font: { family: 'Plus Jakarta Sans', size: 11, weight: '500' } } },
+                },
+                plugins: {
+                    ...defaults.plugins,
+                    tooltip: { ...defaults.plugins.tooltip, callbacks: { label: ctx => ctx.parsed.x + ' tok/s' } },
+                },
+            },
+        });
+    }
 }
 
 // =========================================================================
@@ -388,6 +564,7 @@ async function runPredict() {
         `;
 
         renderPredictTable(data.strategies);
+        renderPredictCharts(data.strategies);
         document.getElementById('predict-results').classList.remove('hidden');
         document.getElementById('strategy-count').textContent = data.strategies.length + ' found';
         statusEl.textContent = `${data.strategies.length} strategies found in ${data.time_ms}ms`;
@@ -404,33 +581,23 @@ function renderPredictTable(strategies) {
     const tbody = document.getElementById('predict-body');
     tbody.innerHTML = '';
     const names = {
-        FULL_GPU: 'Full GPU',
-        GPU_CPU_SPLIT: 'GPU + CPU Split',
-        CPU_ONLY: 'CPU Only',
-        HOT_COLD_SPLIT: 'Hot/Cold Split',
-        LAYER_STREAM: 'Layer Stream',
+        FULL_GPU: 'Full GPU', GPU_CPU_SPLIT: 'GPU + CPU Split', CPU_ONLY: 'CPU Only',
+        HOT_COLD_SPLIT: 'Hot/Cold Split', LAYER_STREAM: 'Layer Stream',
     };
     const maxTPS = Math.max(...strategies.map(s => s.tokens_per_sec || 0), 1);
     const maxVRAM = Math.max(...strategies.map(s => s.vram_bytes || 0), 1);
 
     strategies.forEach((s, i) => {
-        const cls = s.status === 'VIABLE' ? 'status-viable' :
-                    s.status === 'NO_FIT' ? 'status-no-fit' :
-                    s.status === 'TIGHT' ? 'status-tight' : 'status-low-conf';
+        const cls = s.status === 'VIABLE' ? 'status-viable' : s.status === 'NO_FIT' ? 'status-no-fit' : s.status === 'TIGHT' ? 'status-tight' : 'status-low-conf';
         const tpsPct = (s.tokens_per_sec || 0) / maxTPS * 100;
         const vramPct = (s.vram_bytes || 0) / maxVRAM * 100;
-        const tpsClass = s.placement === 'FULL_GPU' ? 'gpu' :
-                         s.placement === 'GPU_CPU_SPLIT' ? 'split' : 'cpu';
+        const tpsClass = s.placement === 'FULL_GPU' ? 'gpu' : s.placement === 'GPU_CPU_SPLIT' ? 'split' : 'cpu';
         const row = document.createElement('tr');
         row.innerHTML = `
             <td style="font-weight:600;color:var(--text-tertiary)">${i + 1}</td>
             <td><strong>${names[s.placement] || s.placement}</strong></td>
-            <td class="bar-cell">${s.tokens_per_sec > 0
-                ? `<div class="bar-bg"><div class="bar-fill ${tpsClass}" style="width:${tpsPct}%"></div><span class="bar-text">~${s.tokens_per_sec.toFixed(0)}</span></div>`
-                : '<span style="color:var(--text-muted)">—</span>'}</td>
-            <td class="bar-cell">${s.vram_bytes > 0
-                ? `<div class="bar-bg"><div class="bar-fill gpu" style="width:${vramPct}%"></div><span class="bar-text">${fmtBytes(s.vram_bytes)}</span></div>`
-                : '<span style="color:var(--text-muted)">—</span>'}</td>
+            <td class="bar-cell">${s.tokens_per_sec > 0 ? `<div class="bar-bg"><div class="bar-fill ${tpsClass}" style="width:${tpsPct}%"></div><span class="bar-text">~${s.tokens_per_sec.toFixed(0)}</span></div>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+            <td class="bar-cell">${s.vram_bytes > 0 ? `<div class="bar-bg"><div class="bar-fill gpu" style="width:${vramPct}%"></div><span class="bar-text">${fmtBytes(s.vram_bytes)}</span></div>` : '<span style="color:var(--text-muted)">—</span>'}</td>
             <td style="font-family:var(--font-mono)">${s.context_length >= 1024 ? (s.context_length / 1024) + 'K' : s.context_length}</td>
             <td style="font-family:var(--font-mono)">${s.kv_quant_bits === 16 ? 'FP16' : 'Q' + s.kv_quant_bits}</td>
             <td style="font-family:var(--font-mono)">${s.ttft_ms > 0 && s.ttft_ms < 60000 ? '~' + s.ttft_ms + 'ms' : '—'}</td>
@@ -441,15 +608,57 @@ function renderPredictTable(strategies) {
     });
 }
 
+function renderPredictCharts(strategies) {
+    const c = chartColors();
+    const defaults = chartDefaults();
+    const names = strategies.map(s => {
+        const n = { FULL_GPU: 'GPU', GPU_CPU_SPLIT: 'Split', CPU_ONLY: 'CPU', HOT_COLD_SPLIT: 'Hot/Cold', LAYER_STREAM: 'Stream' };
+        return n[s.placement] || s.placement;
+    });
+
+    // Speed chart
+    const speedEl = document.getElementById('chart-strategy-speed');
+    if (speedEl) {
+        if (charts.strategySpeed) charts.strategySpeed.destroy();
+        const speedColors = strategies.map(s => s.placement === 'FULL_GPU' ? c.green : s.placement === 'GPU_CPU_SPLIT' ? c.yellow : s.placement === 'HOT_COLD_SPLIT' ? c.purple : s.placement === 'LAYER_STREAM' ? c.cyan : c.red);
+        charts.strategySpeed = new Chart(speedEl, {
+            type: 'bar',
+            data: {
+                labels: names,
+                datasets: [{ label: 'tok/s', data: strategies.map(s => s.tokens_per_sec), backgroundColor: speedColors.map(col => col + '50'), borderColor: speedColors, borderWidth: 1, borderRadius: 4, borderSkipped: false }],
+            },
+            options: {
+                ...defaults,
+                plugins: { ...defaults.plugins, title: { display: true, text: 'Speed (tok/s)', color: c.text, font: { family: 'Plus Jakarta Sans', size: 12, weight: '600' } } },
+                scales: { ...defaults.scales, y: { ...defaults.scales.y, beginAtZero: true } },
+            },
+        });
+    }
+
+    // VRAM chart
+    const vramEl = document.getElementById('chart-strategy-vram');
+    if (vramEl) {
+        if (charts.strategyVram) charts.strategyVram.destroy();
+        const vramGB = strategies.map(s => parseFloat((s.vram_bytes / 1e9).toFixed(1)));
+        const vramColors = strategies.map(s => s.vram_bytes / 1e9 > 20 ? c.red : s.vram_bytes / 1e9 > 15 ? c.yellow : c.green);
+        charts.strategyVram = new Chart(vramEl, {
+            type: 'bar',
+            data: {
+                labels: names,
+                datasets: [{ label: 'VRAM (GB)', data: vramGB, backgroundColor: vramColors.map(col => col + '50'), borderColor: vramColors, borderWidth: 1, borderRadius: 4, borderSkipped: false }],
+            },
+            options: {
+                ...defaults,
+                plugins: { ...defaults.plugins, title: { display: true, text: 'VRAM Usage (GB)', color: c.text, font: { family: 'Plus Jakarta Sans', size: 12, weight: '600' } } },
+                scales: { ...defaults.scales, y: { ...defaults.scales.y, beginAtZero: true, max: 24 } },
+            },
+        });
+    }
+}
+
 function selectStrategy(i) {
     const s = state.predictStrategies[i];
-    openExecModal({
-        strategy: s,
-        placement: s.placement,
-        gpu_layers: s.gpu_layers,
-        context: s.context_length,
-        kv: s.kv_quant_bits,
-    });
+    openExecModal({ strategy: s, placement: s.placement, gpu_layers: s.gpu_layers, context: s.context_length, kv: s.kv_quant_bits });
 }
 
 // =========================================================================
@@ -473,7 +682,7 @@ async function loadRecommendations() {
         state.recommendData = data.recommendations || [];
         container.innerHTML = '';
 
-        state.recommendData.forEach((r, i) => {
+        state.recommendData.forEach((r) => {
             const card = document.createElement('div');
             card.className = 'rec-card';
             card.innerHTML = `
@@ -492,9 +701,60 @@ async function loadRecommendations() {
             `;
             container.appendChild(card);
         });
+
+        renderRecommendChart(state.recommendData);
     } catch (e) {
         container.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
     }
+}
+
+function renderRecommendChart(recommendations) {
+    const c = chartColors();
+    const defaults = chartDefaults();
+    const el = document.getElementById('chart-rec-scatter');
+    if (!el) return;
+
+    if (charts.recScatter) charts.recScatter.destroy();
+
+    charts.recScatter = new Chart(el, {
+        type: 'scatter',
+        data: {
+            datasets: [{
+                label: 'Models',
+                data: recommendations.map(r => ({
+                    x: r.tokens_per_sec,
+                    y: r.quality_score || 7,
+                    label: r.model,
+                })),
+                backgroundColor: recommendations.map((_, i) => [c.accent, c.green, c.purple, c.yellow, c.cyan, c.red, '#fb923c', '#e879f9'][i % 8] + '90'),
+                borderColor: recommendations.map((_, i) => [c.accent, c.green, c.purple, c.yellow, c.cyan, c.red, '#fb923c', '#e879f9'][i % 8]),
+                borderWidth: 2,
+                pointRadius: 8,
+                pointHoverRadius: 11,
+            }],
+        },
+        options: {
+            ...defaults,
+            plugins: {
+                ...defaults.plugins,
+                legend: { display: false },
+                tooltip: {
+                    ...defaults.plugins.tooltip,
+                    callbacks: {
+                        title: () => '',
+                        label: ctx => {
+                            const r = recommendations[ctx.dataIndex];
+                            return [r.model, `Speed: ${r.tokens_per_sec} tok/s`, `Quality: ${r.quality_score}/10`];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: { ...defaults.scales.x, title: { display: true, text: 'Speed (tok/s)', color: c.text, font: { family: 'Plus Jakarta Sans' } }, min: 0 },
+                y: { ...defaults.scales.y, title: { display: true, text: 'Quality Score', color: c.text, font: { family: 'Plus Jakarta Sans' } }, min: 5, max: 10 },
+            },
+        },
+    });
 }
 
 // =========================================================================
@@ -513,7 +773,6 @@ downloadAndRun = async function (url, modelName) {
     document.getElementById('btn-close-exec').classList.add('hidden');
 
     if (USE_MOCK_DATA) {
-        // Simulate download + execution
         for (let pct = 0; pct <= 100; pct += 5) {
             await new Promise(r => setTimeout(r, 100));
             document.getElementById('exec-progress').style.width = pct + '%';
@@ -522,10 +781,7 @@ downloadAndRun = async function (url, modelName) {
             document.getElementById('exec-tps').textContent = (120 + Math.random() * 40).toFixed(0) + ' MB/s';
             document.getElementById('exec-temp').textContent = Math.ceil((100 - pct) * 0.3) + 's';
         }
-        output.textContent += '\nDownload complete!\nStarting execution...\n';
-        output.textContent += 'Loading model into VRAM...\n';
-        output.textContent += 'Model loaded (2.3s)\n';
-        output.textContent += 'Prefill: 12ms for 24 tokens\n';
+        output.textContent += '\nDownload complete!\nStarting execution...\nModel loaded (2.3s)\nPrefill: 12ms for 24 tokens\n';
         const mockResponse = 'Hello! I\'m doing well, thank you for asking. As a large language model, I\'m here to help you with any questions or tasks you might have. How can I assist you today?';
         for (let i = 0; i < mockResponse.length; i++) {
             output.textContent += mockResponse[i];
@@ -543,36 +799,23 @@ downloadAndRun = async function (url, modelName) {
 
     try {
         const result = await api.startDownload(url);
-        const taskId = result.task_id;
         const streamUrl = result.stream_url;
-        output.textContent += `Download started (task: ${taskId})\n`;
-
+        output.textContent += `Download started (task: ${result.task_id})\n`;
         const dlSSE = new EventSource(API + streamUrl);
         dlSSE.addEventListener('progress', e => {
             const d = JSON.parse(e.data);
             const pct = d.bytes_total > 0 ? (d.bytes_downloaded / d.bytes_total * 100).toFixed(1) : 0;
-            const dlGB = (d.bytes_downloaded / 1e9).toFixed(2);
-            const totalGB = (d.bytes_total / 1e9).toFixed(2);
-            const speed = d.speed_mbs ? d.speed_mbs.toFixed(1) : '0';
-            const eta = d.eta_seconds > 60 ? Math.ceil(d.eta_seconds / 60) + 'm' : d.eta_seconds + 's';
             document.getElementById('exec-progress').style.width = pct + '%';
-            document.getElementById('exec-tokens').textContent = `${dlGB}/${totalGB} GB`;
-            document.getElementById('exec-tps').textContent = speed + ' MB/s';
-            document.getElementById('exec-temp').textContent = eta;
+            document.getElementById('exec-tokens').textContent = `${(d.bytes_downloaded / 1e9).toFixed(2)}/${(d.bytes_total / 1e9).toFixed(2)} GB`;
+            document.getElementById('exec-tps').textContent = (d.speed_mbs || 0).toFixed(1) + ' MB/s';
         });
         dlSSE.addEventListener('complete', e => {
             dlSSE.close();
             const d = JSON.parse(e.data);
-            const localPath = d.local_path;
-            output.textContent += `\nDownload complete: ${localPath}\nStarting execution...\n`;
-            startExecution(localPath);
+            output.textContent += `\nDownload complete: ${d.local_path}\nStarting execution...\n`;
+            startExecution(d.local_path);
         });
-        dlSSE.addEventListener('error', () => {
-            dlSSE.close();
-            output.textContent += '\nDownload failed.\n';
-            document.getElementById('btn-abort').classList.add('hidden');
-            document.getElementById('btn-close-exec').classList.remove('hidden');
-        });
+        dlSSE.addEventListener('error', () => { dlSSE.close(); output.textContent += '\nDownload failed.\n'; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); });
     } catch (err) {
         output.textContent += `\nError: ${err.message}\n`;
         document.getElementById('btn-abort').classList.add('hidden');
@@ -593,23 +836,9 @@ async function startExecution(localPath) {
             document.getElementById('exec-tps').textContent = td.current_tok_per_sec ? td.current_tok_per_sec.toFixed(0) + ' tok/s' : '--';
             output.scrollTop = output.scrollHeight;
         });
-        exSSE.addEventListener('complete', e => {
-            exSSE.close();
-            const td = JSON.parse(e.data);
-            if (td.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${td.actual_tokens_per_sec.toFixed(1)} tok/s`;
-            document.getElementById('btn-abort').classList.add('hidden');
-            document.getElementById('btn-close-exec').classList.remove('hidden');
-        });
-        exSSE.addEventListener('error', () => {
-            exSSE.close();
-            document.getElementById('btn-abort').classList.add('hidden');
-            document.getElementById('btn-close-exec').classList.remove('hidden');
-        });
-    } catch (err) {
-        output.textContent += `\nError: ${err.message}\n`;
-        document.getElementById('btn-abort').classList.add('hidden');
-        document.getElementById('btn-close-exec').classList.remove('hidden');
-    }
+        exSSE.addEventListener('complete', e => { exSSE.close(); const td = JSON.parse(e.data); if (td.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${td.actual_tokens_per_sec.toFixed(1)} tok/s`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); });
+        exSSE.addEventListener('error', () => { exSSE.close(); document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); });
+    } catch (err) { output.textContent += `\nError: ${err.message}\n`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); }
 }
 
 // =========================================================================
@@ -618,169 +847,112 @@ async function startExecution(localPath) {
 async function loadLocalModels() {
     try {
         let data;
-        if (USE_MOCK_DATA) {
-            await new Promise(r => setTimeout(r, 300));
-            data = MockData.localModels();
-        } else {
-            data = await api.getLocalModels();
-        }
-
+        if (USE_MOCK_DATA) { await new Promise(r => setTimeout(r, 300)); data = MockData.localModels(); } else { data = await api.getLocalModels(); }
         document.getElementById('models-count').textContent = data.count;
         const list = document.getElementById('models-list');
         list.innerHTML = '';
-
-        if (data.models.length === 0) {
-            list.innerHTML = '<div class="empty-state"><p>No local models found. Download a model to get started.</p></div>';
-            return;
-        }
-
+        if (data.models.length === 0) { list.innerHTML = '<div class="empty-state"><p>No local models found.</p></div>'; return; }
         data.models.forEach(m => {
             const item = document.createElement('div');
             item.className = 'model-item';
-            item.innerHTML = `
-                <div>
-                    <div class="model-name">${m.filename}</div>
-                    <div class="model-meta">${fmtBytes(m.size_bytes)} · ${m.path}</div>
-                </div>
-                <button class="btn btn-primary btn-sm" onclick="document.getElementById('predict-url').value='${m.path}';navigate('predict')">Analyze</button>
-            `;
+            item.innerHTML = `<div><div class="model-name">${m.filename}</div><div class="model-meta">${fmtBytes(m.size_bytes)} · ${m.path}</div></div><button class="btn btn-primary btn-sm" onclick="document.getElementById('predict-url').value='${m.path}';navigate('predict')">Analyze</button>`;
             list.appendChild(item);
         });
-    } catch (e) {
-        document.getElementById('models-count').textContent = '0';
-        document.getElementById('models-list').innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
-    }
+    } catch (e) { document.getElementById('models-count').textContent = '0'; }
 }
 
 // =========================================================================
 // Calibration View
 // =========================================================================
-let calChart = null;
-
 async function loadCalibration() {
     try {
         let calData, histData;
-        if (USE_MOCK_DATA) {
-            await new Promise(r => setTimeout(r, 300));
-            calData = MockData.calibration();
-            histData = MockData.calibrationHistory();
-        } else {
-            calData = await api.getCalibration();
-            histData = await api.getCalHistory();
-        }
-
+        if (USE_MOCK_DATA) { await new Promise(r => setTimeout(r, 300)); calData = MockData.calibration(); histData = MockData.calibrationHistory(); } else { calData = await api.getCalibration(); histData = await api.getCalHistory(); }
         const summary = document.getElementById('cal-summary');
-        if (calData.records === 0) {
-            summary.innerHTML = 'No calibration data yet. Run a model execution to generate data.';
-        } else {
-            summary.innerHTML = `<strong>${calData.matching_records}</strong> records for this hardware · Fingerprint: <code>${calData.fingerprint}</code>`;
-        }
+        summary.innerHTML = calData.records === 0 ? 'No calibration data yet.' : `<strong>${calData.matching_records}</strong> records · Fingerprint: <code>${calData.fingerprint}</code>`;
 
         const tbody = document.getElementById('cal-body');
         tbody.innerHTML = '';
-        const chartContainer = document.getElementById('cal-chart-container');
-        const tableContainer = document.getElementById('cal-table-container');
+        const entries = histData.entries || [];
 
-        if (histData.entries && histData.entries.length > 0) {
-            tableContainer.classList.remove('hidden');
-            histData.entries.slice(-20).reverse().forEach(e => {
+        if (entries.length > 0) {
+            // Table
+            document.getElementById('cal-table-container').classList.remove('hidden');
+            entries.slice(-20).reverse().forEach(e => {
                 const delta = e.actual_tps > 0 ? ((e.predicted_tps - e.actual_tps) / e.actual_tps * 100).toFixed(1) : '--';
                 const absDelta = Math.abs(parseFloat(delta));
                 const deltaClass = absDelta < 10 ? 'status-viable' : absDelta < 20 ? 'status-tight' : 'status-no-fit';
                 const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td style="font-weight:600">${e.model_id || '—'}</td>
-                    <td>${e.placement || '—'}</td>
-                    <td style="font-family:var(--font-mono)">${e.predicted_tps > 0 ? '~' + e.predicted_tps.toFixed(1) : '—'}</td>
-                    <td style="font-family:var(--font-mono)">${e.actual_tps > 0 ? e.actual_tps.toFixed(1) : '—'}</td>
-                    <td class="${deltaClass}" style="font-family:var(--font-mono)">${delta !== '--' ? delta + '%' : '—'}</td>
-                    <td style="color:var(--text-tertiary)">${e.timestamp || '—'}</td>
-                `;
+                row.innerHTML = `<td style="font-weight:600">${e.model_id}</td><td>${e.placement}</td><td style="font-family:var(--font-mono)">~${e.predicted_tps.toFixed(1)}</td><td style="font-family:var(--font-mono)">${e.actual_tps.toFixed(1)}</td><td class="${deltaClass}" style="font-family:var(--font-mono)">${delta}%</td><td style="color:var(--text-tertiary)">${e.timestamp}</td>`;
                 tbody.appendChild(row);
             });
 
-            // Chart
-            const validEntries = histData.entries.filter(e => e.predicted_tps > 0 && e.actual_tps > 0);
-            if (validEntries.length > 0 && typeof Chart !== 'undefined') {
-                chartContainer.classList.remove('hidden');
-                const ctx = document.getElementById('cal-chart').getContext('2d');
-                if (calChart) calChart.destroy();
-                const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-                const textColor = isDark ? '#94a3b8' : '#475569';
-                const maxVal = Math.max(...validEntries.map(e => Math.max(e.predicted_tps, e.actual_tps))) * 1.2;
-                calChart = new Chart(ctx, {
-                    type: 'scatter',
-                    data: {
-                        datasets: [
-                            {
-                                label: 'Predicted vs Actual',
-                                data: validEntries.map(e => ({ x: e.predicted_tps, y: e.actual_tps })),
-                                backgroundColor: isDark ? '#63b3ff' : '#2563eb',
-                                pointRadius: 6,
-                                pointHoverRadius: 8,
-                                pointHoverBackgroundColor: isDark ? '#63b3ff' : '#2563eb',
-                            },
-                            {
-                                label: 'Perfect prediction',
-                                data: [{ x: 0, y: 0 }, { x: maxVal, y: maxVal }],
-                                type: 'line',
-                                borderColor: isDark ? '#475569' : '#cbd5e1',
-                                borderDash: [5, 5],
-                                pointRadius: 0,
-                                borderWidth: 1,
-                                fill: false,
-                            },
-                        ],
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { labels: { color: textColor, font: { family: 'Inter' } } },
-                            tooltip: {
-                                backgroundColor: isDark ? '#1a2236' : '#ffffff',
-                                titleColor: isDark ? '#f0f4f8' : '#0f172a',
-                                bodyColor: isDark ? '#94a3b8' : '#475569',
-                                borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-                                borderWidth: 1,
-                                callbacks: {
-                                    label: (ctx) => `Pred: ${ctx.parsed.x.toFixed(1)} | Actual: ${ctx.parsed.y.toFixed(1)} tok/s`,
-                                },
-                            },
-                        },
-                        scales: {
-                            x: {
-                                title: { display: true, text: 'Predicted tok/s', color: textColor, font: { family: 'Inter' } },
-                                grid: { color: gridColor },
-                                ticks: { color: textColor, font: { family: 'Inter' } },
-                            },
-                            y: {
-                                title: { display: true, text: 'Actual tok/s', color: textColor, font: { family: 'Inter' } },
-                                grid: { color: gridColor },
-                                ticks: { color: textColor, font: { family: 'Inter' } },
-                            },
-                        },
-                    },
-                });
+            // Scatter chart
+            const valid = entries.filter(e => e.predicted_tps > 0 && e.actual_tps > 0);
+            if (valid.length > 0) {
+                document.getElementById('cal-chart-container').classList.remove('hidden');
+                renderCalScatter(valid);
             }
-        } else {
-            chartContainer.classList.add('hidden');
-            tableContainer.classList.add('hidden');
+
+            // Accuracy over time
+            document.getElementById('cal-accuracy-container').classList.remove('hidden');
+            renderCalAccuracy(entries);
         }
-    } catch (e) {
-        console.error('Calibration load error:', e);
-    }
+    } catch (e) { console.error(e); }
+}
+
+function renderCalScatter(valid) {
+    const c = chartColors();
+    const defaults = chartDefaults();
+    const el = document.getElementById('cal-chart');
+    if (!el) return;
+    if (charts.calScatter) charts.calScatter.destroy();
+    const maxVal = Math.max(...valid.map(e => Math.max(e.predicted_tps, e.actual_tps))) * 1.2;
+    charts.calScatter = new Chart(el, {
+        type: 'scatter',
+        data: {
+            datasets: [
+                { label: 'Predicted vs Actual', data: valid.map(e => ({ x: e.predicted_tps, y: e.actual_tps })), backgroundColor: c.accent + '90', borderColor: c.accent, borderWidth: 2, pointRadius: 6, pointHoverRadius: 8 },
+                { label: 'Perfect', data: [{ x: 0, y: 0 }, { x: maxVal, y: maxVal }], type: 'line', borderColor: c.text + '40', borderDash: [5, 5], pointRadius: 0, borderWidth: 1, fill: false },
+            ],
+        },
+        options: {
+            ...defaults,
+            plugins: { ...defaults.plugins, legend: { display: true, labels: { color: c.text, font: { family: 'Plus Jakarta Sans' } } } },
+            scales: {
+                x: { ...defaults.scales.x, title: { display: true, text: 'Predicted tok/s', color: c.text, font: { family: 'Plus Jakarta Sans' } } },
+                y: { ...defaults.scales.y, title: { display: true, text: 'Actual tok/s', color: c.text, font: { family: 'Plus Jakarta Sans' } } },
+            },
+        },
+    });
+}
+
+function renderCalAccuracy(entries) {
+    const c = chartColors();
+    const defaults = chartDefaults();
+    const el = document.getElementById('cal-accuracy-chart');
+    if (!el) return;
+    if (charts.calAccuracy) charts.calAccuracy.destroy();
+    const deltas = entries.map(e => e.actual_tps > 0 ? Math.abs((e.predicted_tps - e.actual_tps) / e.actual_tps * 100) : 0);
+    const labels = entries.map(e => e.model_id);
+    const colors = deltas.map(d => d < 5 ? c.green : d < 15 ? c.yellow : c.red);
+    charts.calAccuracy = new Chart(el, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{ label: 'Error %', data: deltas.map(d => parseFloat(d.toFixed(1))), backgroundColor: colors.map(col => col + '50'), borderColor: colors, borderWidth: 1, borderRadius: 4, borderSkipped: false }],
+        },
+        options: {
+            ...defaults,
+            scales: { ...defaults.scales, y: { ...defaults.scales.y, beginAtZero: true, ticks: { ...defaults.scales.y.ticks, callback: v => v + '%' } } },
+            plugins: { ...defaults.plugins, tooltip: { ...defaults.plugins.tooltip, callbacks: { label: ctx => ctx.parsed.y.toFixed(1) + '% error' } } },
+        },
+    });
 }
 
 async function resetCalibration() {
-    if (!confirm('Reset all calibration data? This cannot be undone.')) return;
-    try {
-        if (!USE_MOCK_DATA) await api.resetCalibration();
-        loadCalibration();
-    } catch (e) {
-        alert('Error: ' + e.message);
-    }
+    if (!confirm('Reset all calibration data?')) return;
+    try { if (!USE_MOCK_DATA) await api.resetCalibration(); loadCalibration(); } catch (e) { alert('Error: ' + e.message); }
 }
 
 // =========================================================================
@@ -803,9 +975,8 @@ async function openExecModal(config) {
         const output = document.getElementById('exec-output');
         output.textContent += 'Loading model into VRAM...\n';
         await new Promise(r => setTimeout(r, 500));
-        output.textContent += 'Model loaded (2.3s)\n';
-        output.textContent += 'Prefill: 12ms for 24 tokens\n';
-        const mockResponse = 'This is a simulated response from the model. In production, this would be the actual inference output from llama.cpp running locally on your hardware.';
+        output.textContent += 'Model loaded (2.3s)\nPrefill: 12ms for 24 tokens\n';
+        const mockResponse = 'This is a simulated response. In production, this would be actual inference output from llama.cpp.';
         for (let i = 0; i < mockResponse.length; i++) {
             output.textContent += mockResponse[i];
             output.scrollTop = output.scrollHeight;
@@ -821,73 +992,17 @@ async function openExecModal(config) {
     }
 
     const output = document.getElementById('exec-output');
-    const totalTokens = config.max_tokens || 200;
-    let tokensGenerated = 0;
-
     try {
-        const result = await api.post('/api/execute', {
-            model_path: config.model_path,
-            prompt: config.prompt || 'Hello, how are you?',
-            max_tokens: totalTokens,
-        });
-        const streamUrl = result.stream_url;
-        if (!streamUrl) throw new Error('No stream URL returned');
-
-        output.textContent += 'Connected to execution stream...\n';
-        execSSE = new EventSource(streamUrl);
-
-        execSSE.addEventListener('loading', e => {
-            const d = JSON.parse(e.data);
-            output.textContent += d.message + '\n';
-        });
-        execSSE.addEventListener('loaded', e => {
-            const d = JSON.parse(e.data);
-            document.getElementById('exec-vram').textContent = (d.vram_used_bytes / 1e9).toFixed(1);
-            output.textContent += `Model loaded (${(d.load_time_ms / 1000).toFixed(1)}s)\n`;
-        });
-        execSSE.addEventListener('token', e => {
-            const d = JSON.parse(e.data);
-            output.textContent += d.token;
-            tokensGenerated = d.tokens_generated;
-            document.getElementById('exec-tokens').textContent = `${tokensGenerated}/${totalTokens}`;
-            document.getElementById('exec-tps').textContent = d.current_tok_per_sec.toFixed(0);
-            document.getElementById('exec-progress').style.width = `${Math.min(100, (tokensGenerated / totalTokens) * 100)}%`;
-            output.scrollTop = output.scrollHeight;
-        });
-        execSSE.addEventListener('hardware_sample', e => {
-            const d = JSON.parse(e.data);
-            document.getElementById('exec-vram').textContent = (d.vram_used_bytes / 1e9).toFixed(1);
-            if (d.gpu_temp_celsius > 0) document.getElementById('exec-temp').textContent = d.gpu_temp_celsius;
-        });
-        execSSE.addEventListener('complete', e => {
-            const d = JSON.parse(e.data);
-            if (d.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${d.actual_tokens_per_sec.toFixed(1)} tok/s`;
-            document.getElementById('btn-abort').classList.add('hidden');
-            document.getElementById('btn-close-exec').classList.remove('hidden');
-            execSSE.close();
-            execSSE = null;
-        });
-        execSSE.addEventListener('error', () => {
-            output.textContent += '\n[Connection lost]\n';
-            document.getElementById('btn-abort').classList.add('hidden');
-            document.getElementById('btn-close-exec').classList.remove('hidden');
-            if (execSSE) { execSSE.close(); execSSE = null; }
-        });
-    } catch (err) {
-        output.textContent += `\nError: ${err.message}\n`;
-        document.getElementById('btn-abort').classList.add('hidden');
-        document.getElementById('btn-close-exec').classList.remove('hidden');
-    }
+        const result = await api.post('/api/execute', { model_path: config.model_path, prompt: config.prompt || 'Hello, how are you?', max_tokens: 200 });
+        execSSE = new EventSource(API + result.stream_url);
+        execSSE.addEventListener('token', e => { const d = JSON.parse(e.data); output.textContent += d.token; document.getElementById('exec-tokens').textContent = d.tokens_generated; document.getElementById('exec-tps').textContent = d.current_tok_per_sec?.toFixed(0); document.getElementById('exec-progress').style.width = `${Math.min(100, (d.tokens_generated / 200) * 100)}%`; output.scrollTop = output.scrollHeight; });
+        execSSE.addEventListener('complete', e => { const d = JSON.parse(e.data); if (d.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${d.actual_tokens_per_sec.toFixed(1)} tok/s`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); execSSE.close(); execSSE = null; });
+        execSSE.addEventListener('error', () => { document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); if (execSSE) { execSSE.close(); execSSE = null; } });
+    } catch (err) { output.textContent += `\nError: ${err.message}\n`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); }
 }
 
-function closeExecModal() {
-    document.getElementById('exec-modal').classList.add('hidden');
-    if (execSSE) { execSSE.close(); execSSE = null; }
-}
-
-async function abortExecution() {
-    closeExecModal();
-}
+function closeExecModal() { document.getElementById('exec-modal').classList.add('hidden'); if (execSSE) { execSSE.close(); execSSE = null; } }
+async function abortExecution() { closeExecModal(); }
 
 // =========================================================================
 // Settings
@@ -896,18 +1011,8 @@ function toggleMockMode(enabled) {
     USE_MOCK_DATA = enabled;
     const label = document.getElementById('data-source-label');
     const badge = document.getElementById('data-source-badge');
-    if (enabled) {
-        label.textContent = 'Mock Data (Development)';
-        badge.textContent = 'DEV';
-        badge.className = 'setting-badge dev';
-        startMockSSE();
-    } else {
-        label.textContent = 'Live API (Production)';
-        badge.textContent = 'LIVE';
-        badge.className = 'setting-badge prod';
-        startHWSSE();
-    }
-    // Reload current view with new data source
+    if (enabled) { label.textContent = 'Mock Data (Development)'; badge.textContent = 'DEV'; badge.className = 'setting-badge dev'; startMockSSE(); }
+    else { label.textContent = 'Live API (Production)'; badge.textContent = 'LIVE'; badge.className = 'setting-badge prod'; startHWSSE(); }
     navigate(state.currentView);
 }
 
@@ -915,15 +1020,9 @@ function toggleMockMode(enabled) {
 // Init
 // =========================================================================
 document.addEventListener('DOMContentLoaded', () => {
-    // Set initial toggle state
     const toggle = document.getElementById('mock-toggle');
     if (toggle) toggle.checked = USE_MOCK_DATA;
     toggleMockMode(USE_MOCK_DATA);
-
     loadHardware();
-    if (USE_MOCK_DATA) {
-        startMockSSE();
-    } else {
-        startHWSSE();
-    }
+    if (USE_MOCK_DATA) startMockSSE(); else startHWSSE();
 });

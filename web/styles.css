@@ -64,7 +64,7 @@
     --radius-xl: 20px;
 
     /* Typography */
-    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
 
     /* Transitions */
@@ -1386,9 +1386,40 @@ select:focus {
     font-size: 0.9rem;
 }
 
+/* ─── Chart Containers ────────────────────────────────────────────────── */
+.chart-container {
+    position: relative;
+    width: 100%;
+    height: 220px;
+}
+
+.chart-container--bar {
+    height: 200px;
+}
+
+.chart-container--sm {
+    height: 160px;
+}
+
+.predict-charts-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+/* ─── Quick Actions Row ────────────────────────────────────────────────── */
+.quick-actions-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}
+
 /* ─── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 1200px) {
     .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .quick-actions-row { grid-template-columns: 1fr; }
+    .predict-charts-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 900px) {
