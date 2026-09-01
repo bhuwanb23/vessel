@@ -5,7 +5,7 @@
 // ╔════════════════════════════════════════════════════════════════════════╗
 // ║  SINGLE TOGGLE: Set to `false` to connect to live backend API       ║
 // ╚════════════════════════════════════════════════════════════════════════╝
-let USE_MOCK_DATA = true;
+let USE_MOCK_DATA = false;
 
 const API = '';
 
@@ -772,31 +772,6 @@ downloadAndRun = async function (url, modelName) {
     document.getElementById('btn-abort').classList.remove('hidden');
     document.getElementById('btn-close-exec').classList.add('hidden');
 
-    if (USE_MOCK_DATA) {
-        for (let pct = 0; pct <= 100; pct += 5) {
-            await new Promise(r => setTimeout(r, 100));
-            document.getElementById('exec-progress').style.width = pct + '%';
-            const dlGB = (pct / 100 * 8.9).toFixed(2);
-            document.getElementById('exec-tokens').textContent = `${dlGB}/8.9 GB`;
-            document.getElementById('exec-tps').textContent = (120 + Math.random() * 40).toFixed(0) + ' MB/s';
-            document.getElementById('exec-temp').textContent = Math.ceil((100 - pct) * 0.3) + 's';
-        }
-        output.textContent += '\nDownload complete!\nStarting execution...\nModel loaded (2.3s)\nPrefill: 12ms for 24 tokens\n';
-        const mockResponse = 'Hello! I\'m doing well, thank you for asking. As a large language model, I\'m here to help you with any questions or tasks you might have. How can I assist you today?';
-        for (let i = 0; i < mockResponse.length; i++) {
-            output.textContent += mockResponse[i];
-            output.scrollTop = output.scrollHeight;
-            document.getElementById('exec-tps').textContent = (135 + Math.random() * 15).toFixed(0);
-            document.getElementById('exec-tokens').textContent = `${i + 1}/200`;
-            document.getElementById('exec-progress').style.width = `${Math.min(100, (i / 200) * 100)}%`;
-            await new Promise(r => setTimeout(r, 20));
-        }
-        output.textContent += `\n\nAvg: 138.5 tok/s | TTFT: 12ms`;
-        document.getElementById('btn-abort').classList.add('hidden');
-        document.getElementById('btn-close-exec').classList.remove('hidden');
-        return;
-    }
-
     try {
         const result = await api.startDownload(url);
         const streamUrl = result.stream_url;
@@ -805,17 +780,28 @@ downloadAndRun = async function (url, modelName) {
         dlSSE.addEventListener('progress', e => {
             const d = JSON.parse(e.data);
             const pct = d.bytes_total > 0 ? (d.bytes_downloaded / d.bytes_total * 100).toFixed(1) : 0;
+            const dlGB = (d.bytes_downloaded / 1e9).toFixed(2);
+            const totalGB = (d.bytes_total / 1e9).toFixed(2);
+            const speed = d.speed_mbs ? d.speed_mbs.toFixed(1) : '0';
+            const eta = d.eta_seconds > 60 ? Math.ceil(d.eta_seconds / 60) + 'm' : d.eta_seconds + 's';
             document.getElementById('exec-progress').style.width = pct + '%';
-            document.getElementById('exec-tokens').textContent = `${(d.bytes_downloaded / 1e9).toFixed(2)}/${(d.bytes_total / 1e9).toFixed(2)} GB`;
-            document.getElementById('exec-tps').textContent = (d.speed_mbs || 0).toFixed(1) + ' MB/s';
+            document.getElementById('exec-tokens').textContent = `${dlGB}/${totalGB} GB`;
+            document.getElementById('exec-tps').textContent = speed + ' MB/s';
+            document.getElementById('exec-temp').textContent = eta;
         });
         dlSSE.addEventListener('complete', e => {
             dlSSE.close();
             const d = JSON.parse(e.data);
             output.textContent += `\nDownload complete: ${d.local_path}\nStarting execution...\n`;
-            startExecution(d.local_path);
+            startExecution(d.local_path, output);
         });
-        dlSSE.addEventListener('error', () => { dlSSE.close(); output.textContent += '\nDownload failed.\n'; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); });
+        dlSSE.addEventListener('error', e => {
+            dlSSE.close();
+            const d = e.data ? JSON.parse(e.data) : {};
+            output.textContent += `\nDownload failed: ${d.message || 'Unknown error'}\n`;
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+        });
     } catch (err) {
         output.textContent += `\nError: ${err.message}\n`;
         document.getElementById('btn-abort').classList.add('hidden');
@@ -823,22 +809,41 @@ downloadAndRun = async function (url, modelName) {
     }
 };
 
-async function startExecution(localPath) {
-    if (USE_MOCK_DATA) return;
-    const output = document.getElementById('exec-output');
+async function startExecution(localPath, outputEl) {
+    const output = outputEl || document.getElementById('exec-output');
     try {
         const exResult = await api.startExecute(localPath, null, 'Hello, how are you?', 200);
         const exSSE = new EventSource(API + exResult.stream_url);
         exSSE.addEventListener('token', e => {
             const td = JSON.parse(e.data);
-            output.textContent += td.token || '';
-            document.getElementById('exec-tokens').textContent = td.tokens_generated;
-            document.getElementById('exec-tps').textContent = td.current_tok_per_sec ? td.current_tok_per_sec.toFixed(0) + ' tok/s' : '--';
-            output.scrollTop = output.scrollHeight;
+            // Backend sends {tokens_generated, current_tok_per_sec} — no individual token text
+            document.getElementById('exec-tokens').textContent = td.tokens_generated + '/200';
+            document.getElementById('exec-tps').textContent = td.current_tok_per_sec ? td.current_tok_per_sec.toFixed(0) : '--';
+            document.getElementById('exec-progress').style.width = Math.min(100, (td.tokens_generated / 200) * 100) + '%';
         });
-        exSSE.addEventListener('complete', e => { exSSE.close(); const td = JSON.parse(e.data); if (td.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${td.actual_tokens_per_sec.toFixed(1)} tok/s`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); });
-        exSSE.addEventListener('error', () => { exSSE.close(); document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); });
-    } catch (err) { output.textContent += `\nError: ${err.message}\n`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); }
+        exSSE.addEventListener('complete', e => {
+            exSSE.close();
+            const td = JSON.parse(e.data);
+            if (td.generated_text) output.textContent += td.generated_text;
+            if (td.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${td.actual_tokens_per_sec.toFixed(1)} tok/s`;
+            if (td.actual_ttft_ms) output.textContent += ` | TTFT: ${td.actual_ttft_ms}ms`;
+            if (td.peak_vram_bytes) document.getElementById('exec-vram').textContent = (td.peak_vram_bytes / 1e9).toFixed(1);
+            output.scrollTop = output.scrollHeight;
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+        });
+        exSSE.addEventListener('error', e => {
+            exSSE.close();
+            const d = e.data ? JSON.parse(e.data) : {};
+            if (d.message) output.textContent += `\nError: ${d.message}\n`;
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+        });
+    } catch (err) {
+        output.textContent += `\nError: ${err.message}\n`;
+        document.getElementById('btn-abort').classList.add('hidden');
+        document.getElementById('btn-close-exec').classList.remove('hidden');
+    }
 }
 
 // =========================================================================
@@ -971,34 +976,49 @@ async function openExecModal(config) {
     document.getElementById('btn-abort').classList.remove('hidden');
     document.getElementById('btn-close-exec').classList.add('hidden');
 
-    if (USE_MOCK_DATA) {
-        const output = document.getElementById('exec-output');
-        output.textContent += 'Loading model into VRAM...\n';
-        await new Promise(r => setTimeout(r, 500));
-        output.textContent += 'Model loaded (2.3s)\nPrefill: 12ms for 24 tokens\n';
-        const mockResponse = 'This is a simulated response. In production, this would be actual inference output from llama.cpp.';
-        for (let i = 0; i < mockResponse.length; i++) {
-            output.textContent += mockResponse[i];
-            output.scrollTop = output.scrollHeight;
-            document.getElementById('exec-tps').textContent = (135 + Math.random() * 15).toFixed(0);
-            document.getElementById('exec-tokens').textContent = `${i + 1}/200`;
-            document.getElementById('exec-progress').style.width = `${Math.min(100, (i / 200) * 100)}%`;
-            await new Promise(r => setTimeout(r, 25));
-        }
-        output.textContent += `\n\nAvg: 138.5 tok/s | TTFT: 12ms`;
-        document.getElementById('btn-abort').classList.add('hidden');
-        document.getElementById('btn-close-exec').classList.remove('hidden');
-        return;
-    }
-
     const output = document.getElementById('exec-output');
     try {
         const result = await api.post('/api/execute', { model_path: config.model_path, prompt: config.prompt || 'Hello, how are you?', max_tokens: 200 });
-        execSSE = new EventSource(API + result.stream_url);
-        execSSE.addEventListener('token', e => { const d = JSON.parse(e.data); output.textContent += d.token; document.getElementById('exec-tokens').textContent = d.tokens_generated; document.getElementById('exec-tps').textContent = d.current_tok_per_sec?.toFixed(0); document.getElementById('exec-progress').style.width = `${Math.min(100, (d.tokens_generated / 200) * 100)}%`; output.scrollTop = output.scrollHeight; });
-        execSSE.addEventListener('complete', e => { const d = JSON.parse(e.data); if (d.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${d.actual_tokens_per_sec.toFixed(1)} tok/s`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); execSSE.close(); execSSE = null; });
-        execSSE.addEventListener('error', () => { document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); if (execSSE) { execSSE.close(); execSSE = null; } });
-    } catch (err) { output.textContent += `\nError: ${err.message}\n`; document.getElementById('btn-abort').classList.add('hidden'); document.getElementById('btn-close-exec').classList.remove('hidden'); }
+        const streamUrl = result.stream_url;
+        if (!streamUrl) throw new Error('No stream URL returned');
+        output.textContent += 'Connected to execution stream...\n';
+        execSSE = new EventSource(API + streamUrl);
+        execSSE.addEventListener('loading', e => {
+            const d = JSON.parse(e.data);
+            output.textContent += d.message + '\n';
+        });
+        execSSE.addEventListener('token', e => {
+            const d = JSON.parse(e.data);
+            // Backend sends {tokens_generated, current_tok_per_sec} — no individual token text
+            document.getElementById('exec-tokens').textContent = d.tokens_generated + '/200';
+            document.getElementById('exec-tps').textContent = d.current_tok_per_sec ? d.current_tok_per_sec.toFixed(0) : '--';
+            document.getElementById('exec-progress').style.width = Math.min(100, (d.tokens_generated / 200) * 100) + '%';
+        });
+        execSSE.addEventListener('complete', e => {
+            const d = JSON.parse(e.data);
+            if (d.generated_text) output.textContent += d.generated_text;
+            if (d.actual_tokens_per_sec) output.textContent += `\n\nAvg: ${d.actual_tokens_per_sec.toFixed(1)} tok/s`;
+            if (d.actual_ttft_ms) output.textContent += ` | TTFT: ${d.actual_ttft_ms}ms`;
+            if (d.throttled) output.textContent += ' | THROTTLED';
+            if (d.peak_vram_bytes) document.getElementById('exec-vram').textContent = (d.peak_vram_bytes / 1e9).toFixed(1);
+            output.scrollTop = output.scrollHeight;
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+            execSSE.close(); execSSE = null;
+        });
+        execSSE.addEventListener('error', e => {
+            const d = e.data ? JSON.parse(e.data) : {};
+            if (d.message) output.textContent += `\nError: ${d.message}\n`;
+            else output.textContent += '\n[Connection lost]\n';
+            document.getElementById('btn-abort').classList.add('hidden');
+            document.getElementById('btn-close-exec').classList.remove('hidden');
+            if (execSSE) { execSSE.close(); execSSE = null; }
+        });
+    } catch (err) {
+        output.textContent += `\nError: ${err.message}\n`;
+        document.getElementById('btn-abort').classList.add('hidden');
+        document.getElementById('btn-close-exec').classList.remove('hidden');
+    }
 }
 
 function closeExecModal() { document.getElementById('exec-modal').classList.add('hidden'); if (execSSE) { execSSE.close(); execSSE = null; } }
