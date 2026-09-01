@@ -200,7 +200,6 @@ select_asset() {
     step "Selecting correct release asset"
 
     ASSET_NAME="vessel-${OS}-${ARCH}"
-    info "Target asset: ${ASSET_NAME}.tar.gz"
 
     # Check if asset exists in the release
     local assets_json
@@ -209,8 +208,22 @@ select_asset() {
         "${GITHUB_API_BASE}/releases/tags/${VERSION}" 2>/dev/null) || true
 
     if [ -n "$assets_json" ]; then
-        # Look for .tar.gz
+        # Look for .zip (Windows)
         local download_url
+        download_url=$(echo "$assets_json" \
+            | grep -o "\"browser_download_url\":\s*\"[^\"]*${ASSET_NAME}\.zip\"" \
+            | head -1 \
+            | sed -E 's/.*"browser_download_url":\s*"([^"]+)".*/\1/') || true
+
+        if [ -n "$download_url" ]; then
+            DOWNLOAD_URL="$download_url"
+            IS_TAR=0
+            IS_ZIP=1
+            info "Found asset: ${ASSET_NAME}.zip"
+            return
+        fi
+
+        # Look for .tar.gz (Linux/macOS)
         download_url=$(echo "$assets_json" \
             | grep -o "\"browser_download_url\":\s*\"[^\"]*${ASSET_NAME}\.tar\.gz\"" \
             | head -1 \
@@ -219,11 +232,12 @@ select_asset() {
         if [ -n "$download_url" ]; then
             DOWNLOAD_URL="$download_url"
             IS_TAR=1
+            IS_ZIP=0
             info "Found asset: ${ASSET_NAME}.tar.gz"
             return
         fi
 
-        # Look for single binary
+        # Look for single binary (no extension)
         download_url=$(echo "$assets_json" \
             | grep -o "\"browser_download_url\":\s*\"[^\"]*${ASSET_NAME}\"" \
             | head -1 \
@@ -232,6 +246,7 @@ select_asset() {
         if [ -n "$download_url" ]; then
             DOWNLOAD_URL="$download_url"
             IS_TAR=0
+            IS_ZIP=0
             info "Found single binary: ${ASSET_NAME}"
             return
         fi
@@ -241,10 +256,17 @@ select_asset() {
         echo "$assets_json" | grep '"name"' | sed -E 's/.*"name":\s*"([^"]+)".*/  - \1/' | head -20
     fi
 
-    # Fallback: try direct download URL
+    # Fallback: try direct download URL for zip (Windows) or tar.gz (others)
     info "Attempting direct download..."
-    DOWNLOAD_URL="${GITHUB_RELEASES_BASE}/download/${VERSION}/${ASSET_NAME}.tar.gz"
-    IS_TAR=1
+    if [ "$OS" = "windows" ]; then
+        DOWNLOAD_URL="${GITHUB_RELEASES_BASE}/download/${VERSION}/${ASSET_NAME}.zip"
+        IS_TAR=0
+        IS_ZIP=1
+    else
+        DOWNLOAD_URL="${GITHUB_RELEASES_BASE}/download/${VERSION}/${ASSET_NAME}.tar.gz"
+        IS_TAR=1
+        IS_ZIP=0
+    fi
 }
 
 # =============================================================================
@@ -298,12 +320,58 @@ download_asset() {
 extract_binary() {
     step "Extracting binary"
 
-    if [ "$IS_TAR" -eq 0 ]; then
-        # Single binary, no extraction needed
+    # Single binary (no archive)
+    if [ "$IS_TAR" -eq 0 ] && [ "$IS_ZIP" -eq 0 ]; then
         info "Single binary file, no extraction needed"
         BINARY_PATH="$DOWNLOAD_PATH"
         chmod +x "$BINARY_PATH"
         return
+    fi
+
+    # Windows .zip file
+    if [ "$IS_ZIP" -eq 1 ]; then
+        local extract_dir
+        extract_dir=$(mktemp -d /tmp/vessel-extract.XXXXXX)
+
+        if command -v unzip >/dev/null 2>&1; then
+            unzip -o "$DOWNLOAD_PATH" -d "$extract_dir" >/dev/null 2>&1
+        elif command -v 7z >/dev/null 2>&1; then
+            7z x "$DOWNLOAD_PATH" -o"$extract_dir" >/dev/null 2>&1
+        else
+            # Try PowerShell for extraction on Windows
+            if command -v powershell.exe >/dev/null 2>&1; then
+                powershell.exe -Command "Expand-Archive -Path '$DOWNLOAD_PATH' -DestinationPath '$extract_dir' -Force" 2>/dev/null
+            else
+                rm -rf "$extract_dir"
+                err "No extraction tool found. Install unzip or 7z."
+            fi
+        fi
+
+        local vessel_bin
+        vessel_bin=$(find "$extract_dir" -name "vessel.exe" -type f 2>/dev/null | head -1)
+        if [ -z "$vessel_bin" ]; then
+            vessel_bin=$(find "$extract_dir" -name "vessel" -type f 2>/dev/null | head -1)
+        fi
+        if [ -z "$vessel_bin" ]; then
+            vessel_bin=$(find "$extract_dir" -type f -executable 2>/dev/null | head -1)
+        fi
+
+        if [ -n "$vessel_bin" ]; then
+            BINARY_PATH="$vessel_bin"
+            chmod +x "$BINARY_PATH" 2>/dev/null || true
+            EXTRACT_DIR="$extract_dir"
+            # Copy ALL extracted files (DLLs, etc.) alongside the binary
+            local bin_dir
+            bin_dir=$(dirname "$vessel_bin")
+            EXTRACT_ALL_FILES="$bin_dir"
+            ok "Found binary: $(basename "$vessel_bin")"
+            return
+        else
+            warn "Extracted contents:"
+            find "$extract_dir" -type f | sed 's/^/  - /'
+            rm -rf "$extract_dir"
+            err "No executable found in archive"
+        fi
     fi
 
     local extract_dir
@@ -377,6 +445,23 @@ install_binary() {
     else
         cp "$BINARY_PATH" "$target"
         chmod +x "$target"
+    fi
+
+    # Copy supporting files (DLLs, etc.) from extracted directory
+    if [ -n "${EXTRACT_DIR:-}" ] && [ -d "$EXTRACT_DIR" ]; then
+        for f in "$EXTRACT_DIR"/*; do
+            [ -f "$f" ] || continue
+            fname=$(basename "$f")
+            # Skip the main binary (already copied)
+            case "$fname" in
+                vessel|vessel.exe) continue ;;
+            esac
+            if [ ! -w "$INSTALL_DIR" ] 2>/dev/null; then
+                sudo cp "$f" "$INSTALL_DIR/$fname" 2>/dev/null || true
+            else
+                cp "$f" "$INSTALL_DIR/$fname" 2>/dev/null || true
+            fi
+        done
     fi
 
     if [ ! -f "$target" ]; then
