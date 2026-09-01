@@ -34,6 +34,36 @@ powershell -c "irm https://raw.githubusercontent.com/bhuwanb23/vessel/main/insta
 
 Or download a binary directly from [**Releases**](https://github.com/bhuwanb23/vessel/releases/tag/v0.1.0).
 
+### Enterprise Install (corporate environments)
+
+If `raw.githubusercontent.com` is blocked by your firewall or proxy (e.g., Zscaler), use the enterprise installer which downloads directly from GitHub Releases:
+
+**Windows (PowerShell):**
+```powershell
+# Download the installer from GitHub Releases
+Invoke-WebRequest -Uri "https://github.com/bhuwanb23/vessel/releases/latest/download/install-enterprise.ps1" -OutFile "install-enterprise.ps1"
+
+# Run the installer
+powershell -ExecutionPolicy Bypass -File .\install-enterprise.ps1
+```
+
+**Linux / macOS:**
+```bash
+# Download the installer from GitHub Releases
+curl -fsSL -o install-enterprise.sh https://github.com/bhuwanb23/vessel/releases/latest/download/install-enterprise.sh
+chmod +x install-enterprise.sh
+./install-enterprise.sh
+```
+
+The enterprise installer:
+- Detects your OS and architecture automatically
+- Downloads the correct release asset from GitHub Releases (no `raw.githubusercontent.com` needed)
+- Installs to `~/.vessel/bin` and configures your PATH
+- Verifies the installation works
+- Supports `--version`, `--force`, and `--install-dir` flags
+
+**See [docs/enterprise-install.md](docs/enterprise-install.md) for detailed enterprise deployment guides.**
+
 ### Usage
 
 ```bash

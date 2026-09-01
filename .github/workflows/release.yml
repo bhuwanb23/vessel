@@ -183,7 +183,7 @@ jobs:
           path: dist/vessel-macos-arm64
 
   # =========================================================================
-  # Create Release — Upload all binaries
+  # Create Release — Upload all binaries + enterprise installers
   # =========================================================================
   release:
     needs: [build-windows, build-linux, build-macos]
@@ -192,13 +192,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
       - name: List files
         run: find . -type f | grep -E "vessel-" | head -20
 
-      - name: Create Release
+      - name: Create Release with binaries and enterprise installers
         uses: softprops/action-gh-release@v2
         with:
           draft: false
@@ -208,3 +211,5 @@ jobs:
             vessel-windows-amd64/vessel-windows-amd64.zip
             vessel-linux-amd64/vessel-linux-amd64
             vessel-macos-arm64/vessel-macos-arm64
+            install-enterprise.ps1
+            install-enterprise.sh
