@@ -3,201 +3,441 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vessel - LLM Deployment Planner</title>
+    <title>Vessel — LLM Deployment Dashboard</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Header -->
-    <header>
-        <div class="header-left">
-            <h1>Vessel</h1>
-            <span class="subtitle">LLM Deployment Planner</span>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-icon">⚗</div>
+            <span class="brand-text">Vessel</span>
+            <span class="brand-version">v0.2.0</span>
         </div>
-        <div class="header-right">
-            <span id="platform-badge" class="badge">Detecting...</span>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-view="dashboard" onclick="navigate('dashboard')">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                <span>Dashboard</span>
+            </button>
+            <button class="nav-item" data-view="predict" onclick="navigate('predict')">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <span>Predict</span>
+            </button>
+            <button class="nav-item" data-view="recommend" onclick="navigate('recommend')">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                <span>Recommend</span>
+            </button>
+            <button class="nav-item" data-view="models" onclick="navigate('models')">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                <span>Models</span>
+            </button>
+            <button class="nav-item" data-view="calibration" onclick="navigate('calibration')">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                <span>Calibration</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="hw-status-mini" id="hw-status-mini">
+                <div class="hw-status-dot"></div>
+                <span class="hw-status-text">Detecting...</span>
+            </div>
+            <div class="sidebar-settings">
+                <button class="settings-btn" onclick="navigate('settings')" title="Settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                </button>
+            </div>
         </div>
-    </header>
+    </aside>
 
-    <!-- Tab Navigation -->
-    <nav id="tabs">
-        <button class="tab active" data-view="home">Home</button>
-        <button class="tab" data-view="predict">Predict</button>
-        <button class="tab" data-view="recommend">Recommend</button>
-        <button class="tab" data-view="models">Models</button>
-        <button class="tab" data-view="calibration">Calibration</button>
-    </nav>
+    <!-- Main Content -->
+    <div class="main-wrapper">
+        <!-- Top Bar -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <button class="mobile-menu-btn" onclick="toggleSidebar()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                <h2 class="page-title" id="page-title">Dashboard</h2>
+            </div>
+            <div class="topbar-right">
+                <div class="platform-badge" id="platform-badge">
+                    <span class="badge-dot"></span>
+                    <span id="platform-text">Detecting...</span>
+                </div>
+                <div class="live-indicator" id="live-indicator">
+                    <span class="live-dot"></span>
+                    <span>LIVE</span>
+                </div>
+            </div>
+        </header>
 
-    <!-- Views -->
-    <main>
-        <!-- HOME VIEW -->
-        <section id="view-home" class="view active">
-            <div class="card hardware-card">
-                <div class="card-header">
-                    <span class="gpu-icon">🖥️</span>
-                    <div>
-                        <h2 id="hw-gpu-name">Detecting GPU...</h2>
-                        <p id="hw-summary" class="dim">Profiling hardware...</p>
+        <!-- Content Area -->
+        <main class="content">
+
+            <!-- ==================== DASHBOARD VIEW ==================== -->
+            <section id="view-dashboard" class="view active">
+                <!-- Hero Stats Row -->
+                <div class="stats-row">
+                    <div class="stat-card stat-card--gpu">
+                        <div class="stat-card-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+                        </div>
+                        <div class="stat-card-content">
+                            <span class="stat-label">GPU</span>
+                            <span class="stat-value" id="hero-gpu-name">Detecting...</span>
+                            <span class="stat-sub" id="hero-gpu-detail">—</span>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-card--vram">
+                        <div class="stat-card-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 19v-8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8"/><path d="M6 19h12"/><path d="M10 5V3h4v2"/></svg>
+                        </div>
+                        <div class="stat-card-content">
+                            <span class="stat-label">VRAM Usage</span>
+                            <div class="stat-gauge">
+                                <div class="stat-gauge-bar"><div class="stat-gauge-fill" id="hero-vram-fill"></div></div>
+                            </div>
+                            <span class="stat-sub" id="hero-vram-text">— / —</span>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-card--ram">
+                        <div class="stat-card-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="10" y1="10" x2="10" y2="14"/><line x1="14" y1="10" x2="14" y2="14"/><line x1="18" y1="10" x2="18" y2="14"/></svg>
+                        </div>
+                        <div class="stat-card-content">
+                            <span class="stat-label">System RAM</span>
+                            <div class="stat-gauge">
+                                <div class="stat-gauge-bar"><div class="stat-gauge-fill" id="hero-ram-fill"></div></div>
+                            </div>
+                            <span class="stat-sub" id="hero-ram-text">— / —</span>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-card--temp">
+                        <div class="stat-card-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/></svg>
+                        </div>
+                        <div class="stat-card-content">
+                            <span class="stat-label">GPU Temp</span>
+                            <span class="stat-value stat-value--large" id="hero-temp">—</span>
+                            <span class="stat-sub" id="hero-temp-status">Normal</span>
+                        </div>
                     </div>
                 </div>
-                <div class="gauges-grid">
-                    <div class="gauge-item">
-                        <label>VRAM</label>
-                        <div class="gauge-bar"><div id="vram-bar" class="gauge-fill"></div></div>
-                        <span id="vram-text" class="gauge-label">--</span>
-                    </div>
-                    <div class="gauge-item">
-                        <label>RAM</label>
-                        <div class="gauge-bar"><div id="ram-bar" class="gauge-fill"></div></div>
-                        <span id="ram-text" class="gauge-label">--</span>
-                    </div>
-                    <div class="gauge-item">
-                        <label>Temp</label>
-                        <span id="temp-text" class="gauge-big">--</span>
-                    </div>
-                    <div class="gauge-item">
-                        <label>Bandwidth</label>
-                        <span id="bw-text" class="gauge-big">--</span>
-                    </div>
-                </div>
-                <div class="action-row">
-                    <button class="btn btn-primary" onclick="navigate('predict')">🔍 Predict a Model</button>
-                    <button class="btn btn-secondary" onclick="navigate('recommend')">💡 Get Recommendations</button>
-                    <button class="btn btn-secondary" onclick="navigate('models')">📦 My Models</button>
-                </div>
-            </div>
-        </section>
 
-        <!-- PREDICT VIEW -->
-        <section id="view-predict" class="view">
-            <div class="card">
-                <h2>Predict Strategy</h2>
-                <div class="input-row">
-                    <input type="text" id="predict-url" placeholder="Paste HuggingFace GGUF URL or local path...">
-                    <button id="btn-predict" class="btn btn-primary" onclick="runPredict()">Predict</button>
-                </div>
-                <div class="priority-row">
-                    <label>Priority:</label>
-                    <label class="radio"><input type="radio" name="priority" value="speed" checked> Speed</label>
-                    <label class="radio"><input type="radio" name="priority" value="quality"> Quality</label>
-                    <label class="radio"><input type="radio" name="priority" value="safety"> Safety</label>
-                </div>
-                <div id="predict-status" class="status"></div>
-            </div>
-            <div id="predict-model-info" class="card hidden"></div>
-            <div id="predict-results" class="card hidden">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Placement</th>
-                            <th>tok/s</th>
-                            <th>VRAM</th>
-                            <th>Context</th>
-                            <th>KV</th>
-                            <th>TTFT</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="predict-body"></tbody>
-                </table>
-            </div>
-        </section>
+                <!-- Hardware Details -->
+                <div class="grid-2col">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h3>Hardware Profile</h3>
+                            <span class="card-badge" id="hw-platform-badge">CPU</span>
+                        </div>
+                        <div class="hw-specs" id="hw-specs-grid">
+                            <div class="spec-item">
+                                <span class="spec-label">GPU Bandwidth</span>
+                                <span class="spec-value" id="hw-bw">—</span>
+                            </div>
+                            <div class="spec-item">
+                                <span class="spec-label">GPU TFLOPS (FP16)</span>
+                                <span class="spec-value" id="hw-tflops">—</span>
+                            </div>
+                            <div class="spec-item">
+                                <span class="spec-label">RAM Bandwidth</span>
+                                <span class="spec-value" id="hw-ram-bw">—</span>
+                            </div>
+                            <div class="spec-item">
+                                <span class="spec-label">NVMe Sequential</span>
+                                <span class="spec-value" id="hw-nvme-seq">—</span>
+                            </div>
+                            <div class="spec-item">
+                                <span class="spec-label">NVMe Random 4K</span>
+                                <span class="spec-value" id="hw-nvme-rnd">—</span>
+                            </div>
+                            <div class="spec-item">
+                                <span class="spec-label">Unified Memory</span>
+                                <span class="spec-value" id="hw-unified">—</span>
+                            </div>
+                        </div>
+                    </div>
 
-        <!-- RECOMMEND VIEW -->
-        <section id="view-recommend" class="view">
-            <div class="card">
-                <h2>Model Recommendations</h2>
-                <div class="controls-row">
-                    <select id="rec-priority" onchange="loadRecommendations()">
-                        <option value="balanced">Balanced</option>
-                        <option value="speed">Speed</option>
-                        <option value="quality">Quality</option>
-                    </select>
-                    <select id="rec-usecase" onchange="loadRecommendations()">
-                        <option value="all">All Use Cases</option>
-                        <option value="chat">Chat</option>
-                        <option value="coding">Coding</option>
-                        <option value="reasoning">Reasoning</option>
-                    </select>
-                    <button class="btn btn-primary" onclick="loadRecommendations()">Refresh</button>
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h3>Quick Actions</h3>
+                        </div>
+                        <div class="quick-actions">
+                            <button class="action-btn action-btn--primary" onclick="navigate('predict')">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <div>
+                                    <span class="action-title">Predict a Model</span>
+                                    <span class="action-desc">Paste a GGUF URL to get deployment strategies</span>
+                                </div>
+                            </button>
+                            <button class="action-btn action-btn--secondary" onclick="navigate('recommend')">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                                <div>
+                                    <span class="action-title">Get Recommendations</span>
+                                    <span class="action-desc">Find the best models for your hardware</span>
+                                </div>
+                            </button>
+                            <button class="action-btn action-btn--tertiary" onclick="navigate('models')">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                                <div>
+                                    <span class="action-title">Browse Local Models</span>
+                                    <span class="action-desc">Manage your downloaded GGUF models</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div id="rec-cards" class="cards-grid"></div>
-        </section>
+            </section>
 
-        <!-- MODELS VIEW -->
-        <section id="view-models" class="view">
-            <div class="card">
-                <h2>Local Models</h2>
-                <div id="models-summary" class="dim">Scanning...</div>
-            </div>
-            <div id="models-list" class="card"></div>
-        </section>
-
-        <!-- CALIBRATION VIEW -->
-        <section id="view-calibration" class="view">
-            <div class="card">
-                <h2>Calibration History</h2>
-                <div id="cal-summary" class="dim">Loading...</div>
-                <div class="controls-row">
-                    <button class="btn btn-danger" onclick="resetCalibration()">Reset Calibration</button>
+            <!-- ==================== PREDICT VIEW ==================== -->
+            <section id="view-predict" class="view">
+                <div class="glass-card">
+                    <div class="card-header">
+                        <h3>Predict Deployment Strategy</h3>
+                    </div>
+                    <div class="predict-input-group">
+                        <div class="input-wrapper">
+                            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                            <input type="text" id="predict-url" placeholder="Paste HuggingFace GGUF URL or local path..." class="input-lg">
+                        </div>
+                        <div class="priority-selector">
+                            <span class="priority-label">Priority:</span>
+                            <div class="priority-pills">
+                                <label class="pill active" data-priority="speed">
+                                    <input type="radio" name="priority" value="speed" checked>
+                                    <span>⚡ Speed</span>
+                                </label>
+                                <label class="pill" data-priority="quality">
+                                    <input type="radio" name="priority" value="quality">
+                                    <span>✨ Quality</span>
+                                </label>
+                                <label class="pill" data-priority="safety">
+                                    <input type="radio" name="priority" value="safety">
+                                    <span>🛡 Safety</span>
+                                </label>
+                            </div>
+                            <button class="btn btn-glow" id="btn-predict" onclick="runPredict()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                Predict
+                            </button>
+                        </div>
+                    </div>
+                    <div id="predict-status" class="status-bar"></div>
                 </div>
-            </div>
-            <div id="cal-chart-container" class="card hidden">
-                <h2>Predicted vs Actual (tok/s)</h2>
-                <canvas id="cal-chart" height="250"></canvas>
-            </div>
-            <div id="cal-table" class="card hidden">
-                <h2>Run History</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Model</th>
-                            <th>Strategy</th>
-                            <th>Predicted</th>
-                            <th>Actual</th>
-                            <th>Delta</th>
-                            <th>Date</th>
-                        </tr>
-                    </thead>
-                    <tbody id="cal-body"></tbody>
-                </table>
-            </div>
-        </section>
-    </main>
+
+                <div id="predict-model-info" class="glass-card hidden"></div>
+                <div id="predict-results" class="glass-card hidden">
+                    <div class="card-header">
+                        <h3>Strategies</h3>
+                        <span class="card-badge" id="strategy-count">0 found</span>
+                    </div>
+                    <div class="strategy-table-wrapper">
+                        <table class="strategy-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Placement</th>
+                                    <th>Speed</th>
+                                    <th>VRAM</th>
+                                    <th>Context</th>
+                                    <th>KV</th>
+                                    <th>TTFT</th>
+                                    <th>Status</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="predict-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== RECOMMEND VIEW ==================== -->
+            <section id="view-recommend" class="view">
+                <div class="glass-card">
+                    <div class="card-header">
+                        <h3>Model Recommendations</h3>
+                    </div>
+                    <div class="recommend-controls">
+                        <div class="control-group">
+                            <label class="control-label">Priority</label>
+                            <select id="rec-priority" onchange="loadRecommendations()">
+                                <option value="balanced">Balanced</option>
+                                <option value="speed">Speed</option>
+                                <option value="quality">Quality</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">Use Case</label>
+                            <select id="rec-usecase" onchange="loadRecommendations()">
+                                <option value="all">All Use Cases</option>
+                                <option value="chat">Chat</option>
+                                <option value="coding">Coding</option>
+                                <option value="reasoning">Reasoning</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div id="rec-cards" class="recommend-grid"></div>
+            </section>
+
+            <!-- ==================== MODELS VIEW ==================== -->
+            <section id="view-models" class="view">
+                <div class="glass-card">
+                    <div class="card-header">
+                        <h3>Local Models</h3>
+                        <span class="card-badge" id="models-count">0</span>
+                    </div>
+                    <div id="models-list" class="models-list"></div>
+                </div>
+            </section>
+
+            <!-- ==================== CALIBRATION VIEW ==================== -->
+            <section id="view-calibration" class="view">
+                <div class="glass-card">
+                    <div class="card-header">
+                        <h3>Calibration History</h3>
+                        <div>
+                            <button class="btn btn-ghost btn-danger-ghost" onclick="resetCalibration()">Reset Data</button>
+                        </div>
+                    </div>
+                    <div id="cal-summary" class="cal-summary">Loading...</div>
+                </div>
+                <div id="cal-chart-container" class="glass-card hidden">
+                    <div class="card-header">
+                        <h3>Predicted vs Actual (tok/s)</h3>
+                    </div>
+                    <canvas id="cal-chart" height="280"></canvas>
+                </div>
+                <div id="cal-table-container" class="glass-card hidden">
+                    <div class="card-header">
+                        <h3>Run History</h3>
+                    </div>
+                    <div class="strategy-table-wrapper">
+                        <table class="strategy-table">
+                            <thead>
+                                <tr>
+                                    <th>Model</th>
+                                    <th>Strategy</th>
+                                    <th>Predicted</th>
+                                    <th>Actual</th>
+                                    <th>Delta</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cal-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== SETTINGS VIEW ==================== -->
+            <section id="view-settings" class="view">
+                <div class="glass-card">
+                    <div class="card-header">
+                        <h3>Settings</h3>
+                    </div>
+                    <div class="settings-list">
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span class="setting-title">Mock Data Mode</span>
+                                <span class="setting-desc">Use simulated data instead of live hardware API. Toggle this to switch between development and production.</span>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="mock-toggle" onchange="toggleMockMode(this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span class="setting-title">Data Source</span>
+                                <span class="setting-desc" id="data-source-label">Mock Data (Development)</span>
+                            </div>
+                            <span class="setting-badge" id="data-source-badge">DEV</span>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span class="setting-title">Server Port</span>
+                                <span class="setting-desc">Web dashboard port</span>
+                            </div>
+                            <span class="setting-value">8080</span>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span class="setting-title">API Port</span>
+                                <span class="setting-desc">OpenAI-compatible API port</span>
+                            </div>
+                            <span class="setting-value">11434</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="glass-card">
+                    <div class="card-header">
+                        <h3>About</h3>
+                    </div>
+                    <div class="about-content">
+                        <p><strong>Vessel</strong> is a local LLM deployment tool that profiles your hardware, predicts memory usage and inference speed, and generates optimal deployment strategies — all before downloading a single gigabyte.</p>
+                        <div class="about-links">
+                            <a href="https://github.com/bhuwanb23/vessel" target="_blank" class="about-link">
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                                GitHub Repository
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
 
     <!-- Execution Modal -->
     <div id="exec-modal" class="modal hidden">
+        <div class="modal-backdrop" onclick="closeExecModal()"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Execution</h2>
-                <button class="btn-close" onclick="closeExecModal()">&times;</button>
+                <h3>Execution</h3>
+                <button class="modal-close" onclick="closeExecModal()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
             </div>
             <div class="exec-stats">
-                <div class="stat"><label>tok/s</label><span id="exec-tps">--</span></div>
-                <div class="stat"><label>VRAM</label><span id="exec-vram">--</span></div>
-                <div class="stat"><label>Temp</label><span id="exec-temp">--</span></div>
-                <div class="stat"><label>Tokens</label><span id="exec-tokens">0/0</span></div>
+                <div class="exec-stat">
+                    <span class="exec-stat-label">Speed</span>
+                    <span class="exec-stat-value" id="exec-tps">—</span>
+                    <span class="exec-stat-unit">tok/s</span>
+                </div>
+                <div class="exec-stat">
+                    <span class="exec-stat-label">VRAM</span>
+                    <span class="exec-stat-value" id="exec-vram">—</span>
+                    <span class="exec-stat-unit">GB</span>
+                </div>
+                <div class="exec-stat">
+                    <span class="exec-stat-label">Temp</span>
+                    <span class="exec-stat-value" id="exec-temp">—</span>
+                    <span class="exec-stat-unit">°C</span>
+                </div>
+                <div class="exec-stat">
+                    <span class="exec-stat-label">Tokens</span>
+                    <span class="exec-stat-value" id="exec-tokens">0/0</span>
+                    <span class="exec-stat-unit"></span>
+                </div>
             </div>
-            <div class="exec-gauge">
-                <div class="gauge-bar"><div id="exec-progress" class="gauge-fill"></div></div>
+            <div class="exec-progress-bar">
+                <div class="exec-progress-fill" id="exec-progress"></div>
             </div>
-            <div id="exec-output" class="exec-output"></div>
-            <div class="exec-actions">
+            <div class="exec-output" id="exec-output"></div>
+            <div class="modal-actions">
                 <button id="btn-abort" class="btn btn-danger" onclick="abortExecution()">Abort</button>
-                <button id="btn-close-exec" class="btn hidden" onclick="closeExecModal()">Close</button>
+                <button id="btn-close-exec" class="btn btn-primary hidden" onclick="closeExecModal()">Close</button>
             </div>
         </div>
     </div>
 
-    <!-- Footer -->
-    <footer>
-        <span>Vessel v0.1.0</span>
-        <span id="footer-status">Ready</span>
-    </footer>
-
-    <script src="/chart.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
