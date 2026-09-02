@@ -4,6 +4,17 @@
 // Memory Prediction Functions
 // =============================================================================
 
+// Convert kv_quant_bits to bytes per KV element.
+// Used by both predict_kv_cache_memory and predict_kv_bytes_per_token.
+static double kv_bytes_per_element(uint32_t kv_quant_bits) {
+    switch (kv_quant_bits) {
+        case 4:  return 0.5;   // Q4 KV cache
+        case 8:  return 1.0;   // Q8 KV cache
+        case 16: return 2.0;   // FP16 (default)
+        default: return 2.0;
+    }
+}
+
 uint64_t predict_weight_memory(const ModelSpec& model) {
     if (model.param_count == 0 || model.bits_per_weight == 0) return 0;
 
@@ -20,11 +31,7 @@ uint64_t predict_kv_cache_memory(const ModelSpec& model, uint32_t context_length
     // Default to batch_size=1 if not provided
     if (batch_size == 0) batch_size = 1;
     
-    // Convert kv_quant_bits to bytes per element
-    double bytes_per_kv_element = 2.0;  // Default FP16
-    if (kv_quant_bits == 8) bytes_per_kv_element = 1.0;
-    else if (kv_quant_bits == 4) bytes_per_kv_element = 0.5;
-    else if (kv_quant_bits == 16) bytes_per_kv_element = 2.0;
+    double bytes_per_kv_element = kv_bytes_per_element(kv_quant_bits);
     
     // Check if this is an MLA model (DeepSeek/Kimi-class)
     bool is_mla = (model.architecture == "deepseek2" || model.architecture == "deepseek_v2");
@@ -89,11 +96,7 @@ uint64_t predict_overhead_memory(const ModelSpec& model, uint32_t batch_size, bo
 double predict_kv_bytes_per_token(const ModelSpec& model, uint32_t kv_quant_bits) {
     if (model.layers == 0) return 0.0;
     
-    // Convert kv_quant_bits to bytes per element
-    double bytes_per_kv_element = 2.0;  // Default FP16
-    if (kv_quant_bits == 8) bytes_per_kv_element = 1.0;
-    else if (kv_quant_bits == 4) bytes_per_kv_element = 0.5;
-    else if (kv_quant_bits == 16) bytes_per_kv_element = 2.0;
+    double bytes_per_kv_element = kv_bytes_per_element(kv_quant_bits);
     
     // Check if MLA model
     bool is_mla = (model.architecture == "deepseek2" || model.architecture == "deepseek_v2");

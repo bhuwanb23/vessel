@@ -37,17 +37,26 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include "timer.h"
 
-// Timer utility
-class Timer {
-    std::chrono::high_resolution_clock::time_point t0;
-public:
-    Timer() : t0(std::chrono::high_resolution_clock::now()) {}
-    double elapsed_ms() {
-        auto now = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration<double, std::milli>(now - t0).count();
+// =============================================================================
+// Helper: Find any local .gguf model file for hardware fingerprint detection.
+// ponytail: hardcoded list — only used for NVMe detection in fingerprints.
+// Upgrade path: scan common dirs at runtime.
+// =============================================================================
+static std::string find_any_model_file() {
+    const char* candidates[] = {
+        "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        "../models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        "./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        "C:/dev/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    };
+    for (const char* c : candidates) {
+        std::ifstream test(c);
+        if (test.is_open()) return c;
     }
-};
+    return "";
+}
 
 // =============================================================================
 // Default benchmark prompt
@@ -118,22 +127,7 @@ int main(int argc, char* argv[]) {
             if (records.empty()) {
                 printf("\nNo calibration data yet. Run with --execute to generate data.\n");
             } else {
-                // Find a model file for NVMe detection in fingerprint
-                std::string model_for_fingerprint;
-                {
-                    // Try common model directories for any .gguf file
-                    std::ifstream test;
-                    const char* candidates[] = {
-                        "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                        "../models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                        "./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                        "C:/dev/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                    };
-                    for (const char* c : candidates) {
-                        test.open(c);
-                        if (test.is_open()) { model_for_fingerprint = c; test.close(); break; }
-                    }
-                }
+                std::string model_for_fingerprint = find_any_model_file();
                 HardwareSpec hw_tmp = profile_hardware(model_for_fingerprint);
                 int match_count = 0;
                 for (const auto& r : records) {
@@ -341,20 +335,7 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     if (recommend_mode) {
         // Step 1: Profile hardware
-        std::string model_for_fingerprint;
-        {
-            std::ifstream test;
-            const char* candidates[] = {
-                "models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                "../models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                "./models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                "C:/dev/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-            };
-            for (const char* c : candidates) {
-                test.open(c);
-                if (test.is_open()) { model_for_fingerprint = c; test.close(); break; }
-            }
-        }
+        std::string model_for_fingerprint = find_any_model_file();
         
         Timer t_hw;
         HardwareSpec hw = profile_hardware(model_for_fingerprint);

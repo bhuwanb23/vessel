@@ -220,10 +220,7 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                 // Determine placement type (Phase H: platform-aware)
                 PlacementStrategy placement;
                 if (gpu_layers >= model.layers) {
-                    // Apple Silicon: Full Metal; Discrete: Full GPU
-                    placement = hw.is_unified_memory ? PlacementStrategy::FULL_GPU
-                                                     : PlacementStrategy::FULL_GPU;
-                    // Both use FULL_GPU — the display name changes, not the enum
+                    placement = PlacementStrategy::FULL_GPU;
                 } else if (gpu_layers == 0) {
                     placement = PlacementStrategy::CPU_ONLY;
                 } else {
@@ -272,35 +269,31 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
     // =========================================================================
     // MoE-Specific Strategies (Step 9, Phase B)
     // =========================================================================
-    // For MoE models, add three specific expert-offload variants:
-    //   1. MoE-Full-VRAM: All shared + all routed experts in VRAM
-    //   2. MoE-Expert-Offload: All shared + E_gpu experts in VRAM, rest in RAM
-    //   3. MoE-CPU-Only: Everything in RAM
-    // =========================================================================
     if (is_moe_model(model)) {
         for (uint32_t ctx : contexts) {
             for (uint32_t kv_bits : kv_quants) {
                 if (ctx > model.context_length) continue;
-                
-                // Strategy 1: MoE Full VRAM (all experts on GPU)
-                {
-                    MoEPlacementPlan plan = computeMoEFullVRAM(hw, model, ctx, kv_bits);
-                    
+
+                // Helper: build a StrategyResult from an MoEPlacementPlan + MoE range prediction
+                auto build_moe_result = [&](
+                    MoEPlacementPlan plan,
+                    PlacementStrategy viable_placement,
+                    uint32_t gpu_layers_override,
+                    std::string description
+                ) {
                     StrategyConfig strat;
-                    strat.placement = plan.viable ? PlacementStrategy::FULL_GPU : PlacementStrategy::GPU_CPU_SPLIT;
-                    strat.gpu_layers = plan.viable ? model.layers : 0;
+                    strat.placement = plan.viable ? viable_placement : PlacementStrategy::CPU_ONLY;
+                    strat.gpu_layers = gpu_layers_override;
                     strat.context_length = ctx;
                     strat.batch_size = 1;
                     strat.kv_quant_bits = kv_bits;
-                    
+
                     Prediction pred = predict(hw, model, strat, cal);
-                    // Override memory with MoE plan values
                     pred.memory_vram_bytes = plan.total_vram_bytes;
                     pred.memory_ram_bytes = plan.total_ram_bytes;
                     pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
                     pred.viable = plan.viable;
-                    
-                    // Compute MoE range prediction using the plan we already have
+
                     if (plan.viable && plan.gpu_experts_per_layer > 0
                         && plan.gpu_experts_per_layer < model.expert_count) {
                         MoEPrediction moe_pred = predictMoERange(hw, model, plan, kv_bits);
@@ -313,59 +306,32 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                             pred.tokens_per_sec = moe_pred.tok_s_expected;
                         }
                     }
-                    
+
                     StrategyResult result;
                     result.strategy = strat;
                     result.prediction = pred;
                     result.moe_plan = plan;
-                    
+                    result.description = description;
+                    return result;
+                };
+
+                // 1. MoE Full VRAM (all experts on GPU)
+                {
+                    MoEPlacementPlan plan = computeMoEFullVRAM(hw, model, ctx, kv_bits);
                     std::ostringstream oss;
                     oss << "MoE Full VRAM";
                     if (!plan.viable) oss << " (" << plan.reason << ")";
                     oss << " (ctx=" << ctx;
                     if (kv_bits == 8) oss << ", KV=Q8";
                     oss << ")";
-                    result.description = oss.str();
-                    
-                    all_strategies.push_back(result);
+                    all_strategies.push_back(
+                        build_moe_result(plan, PlacementStrategy::FULL_GPU,
+                                         plan.viable ? model.layers : 0, oss.str()));
                 }
-                
-                // Strategy 2: MoE Expert Offload (flagship — as many experts on GPU as fit)
+
+                // 2. MoE Expert Offload (as many experts on GPU as fit)
                 {
                     MoEPlacementPlan plan = computeMoEExpertOffload(hw, model, ctx, kv_bits);
-                    
-                    StrategyConfig strat;
-                    strat.placement = plan.viable ? PlacementStrategy::GPU_CPU_SPLIT : PlacementStrategy::CPU_ONLY;
-                    strat.gpu_layers = plan.viable ? model.layers : 0;  // All layers have GPU experts
-                    strat.context_length = ctx;
-                    strat.batch_size = 1;
-                    strat.kv_quant_bits = kv_bits;
-                    
-                    Prediction pred = predict(hw, model, strat, cal);
-                    pred.memory_vram_bytes = plan.total_vram_bytes;
-                    pred.memory_ram_bytes = plan.total_ram_bytes;
-                    pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
-                    pred.viable = plan.viable;
-                    
-                    // Compute MoE range prediction
-                    if (plan.viable && plan.gpu_experts_per_layer > 0
-                        && plan.gpu_experts_per_layer < model.expert_count) {
-                        MoEPrediction moe_pred = predictMoERange(hw, model, plan, kv_bits);
-                        if (moe_pred.valid) {
-                            pred.is_moe_range = true;
-                            pred.tok_s_best = moe_pred.tok_s_best;
-                            pred.tok_s_worst = moe_pred.tok_s_worst;
-                            pred.tok_s_expected = moe_pred.tok_s_expected;
-                            pred.gpu_hit_probability = moe_pred.p_gpu;
-                            pred.tokens_per_sec = moe_pred.tok_s_expected;
-                        }
-                    }
-                    
-                    StrategyResult result;
-                    result.strategy = strat;
-                    result.prediction = pred;
-                    result.moe_plan = plan;
-                    
                     std::ostringstream oss;
                     oss << "MoE Expert Offload";
                     if (plan.viable) {
@@ -376,42 +342,22 @@ std::vector<StrategyResult> generate_matrix(const HardwareSpec& hw, const ModelS
                     oss << ", ctx=" << ctx;
                     if (kv_bits == 8) oss << ", KV=Q8";
                     oss << ")";
-                    result.description = oss.str();
-                    
-                    all_strategies.push_back(result);
+                    all_strategies.push_back(
+                        build_moe_result(plan, PlacementStrategy::CPU_ONLY,
+                                         plan.viable ? model.layers : 0, oss.str()));
                 }
-                
-                // Strategy 3: MoE CPU Only (everything in RAM)
+
+                // 3. MoE CPU Only (everything in RAM)
                 {
                     MoEPlacementPlan plan = computeMoECPUOnly(hw, model, ctx, kv_bits);
-                    
-                    StrategyConfig strat;
-                    strat.placement = PlacementStrategy::CPU_ONLY;
-                    strat.gpu_layers = 0;
-                    strat.context_length = ctx;
-                    strat.batch_size = 1;
-                    strat.kv_quant_bits = kv_bits;
-                    
-                    Prediction pred = predict(hw, model, strat, cal);
-                    pred.memory_vram_bytes = plan.total_vram_bytes;
-                    pred.memory_ram_bytes = plan.total_ram_bytes;
-                    pred.memory_total_bytes = plan.total_vram_bytes + plan.total_ram_bytes;
-                    pred.viable = plan.viable;
-                    
-                    StrategyResult result;
-                    result.strategy = strat;
-                    result.prediction = pred;
-                    result.moe_plan = plan;
-                    
                     std::ostringstream oss;
                     oss << "MoE CPU Only";
                     if (!plan.viable) oss << " (" << plan.reason << ")";
                     oss << " (ctx=" << ctx;
                     if (kv_bits == 8) oss << ", KV=Q8";
                     oss << ")";
-                    result.description = oss.str();
-                    
-                    all_strategies.push_back(result);
+                    all_strategies.push_back(
+                        build_moe_result(plan, PlacementStrategy::CPU_ONLY, 0, oss.str()));
                 }
             }
         }

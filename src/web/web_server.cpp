@@ -89,16 +89,7 @@ static bool is_safe_model_path(const std::string& path, std::string& error) {
     return true;
 }
 
-// Timer utility
-class Timer {
-    std::chrono::high_resolution_clock::time_point t0;
-public:
-    Timer() : t0(std::chrono::high_resolution_clock::now()) {}
-    double elapsed_ms() {
-        auto now = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration<double, std::milli>(now - t0).count();
-    }
-};
+#include "timer.h"
 
 // SSL disabled
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT

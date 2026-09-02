@@ -97,6 +97,31 @@ static double safety_tertiary(const StrategyResult& r) {
 }
 
 // =============================================================================
+// Unified Metric Extraction
+// =============================================================================
+// Single dispatch point — eliminates duplicated switch blocks in
+// calculate_score and sort_by_priority.
+
+struct PriorityMetrics {
+    double primary, secondary, tertiary;
+};
+
+static PriorityMetrics get_priority_metrics(const StrategyResult& r,
+                                            const HardwareSpec& hw,
+                                            PriorityMode priority) {
+    switch (priority) {
+        case PriorityMode::SPEED:
+            return { speed_primary(r), speed_secondary(r), speed_tertiary(r) };
+        case PriorityMode::QUALITY:
+            return { quality_primary(r), quality_secondary(r), quality_tertiary(r) };
+        case PriorityMode::SAFETY:
+            return { safety_primary_val(r, hw), safety_secondary(r), safety_tertiary(r) };
+        default:
+            return { speed_primary(r), speed_secondary(r), speed_tertiary(r) };
+    }
+}
+
+// =============================================================================
 // Confidence Modifier
 // =============================================================================
 // HIGH → 1.0, MEDIUM → 0.9, LOW → 0.7
@@ -139,38 +164,12 @@ double calculate_score(const StrategyResult& result, const HardwareSpec& hw,
     // Non-viable → always bottom
     if (!result.prediction.viable) return -1.0;
 
-    double p, s, t;
-
-    switch (priority) {
-        case PriorityMode::SPEED:
-            p = speed_primary(result);
-            s = speed_secondary(result);
-            t = speed_tertiary(result);
-            break;
-
-        case PriorityMode::QUALITY:
-            p = quality_primary(result);
-            s = quality_secondary(result);
-            t = quality_tertiary(result);
-            break;
-
-        case PriorityMode::SAFETY:
-            p = safety_primary_val(result, hw);
-            s = safety_secondary(result);
-            t = safety_tertiary(result);
-            break;
-
-        default:
-            p = speed_primary(result);
-            s = speed_secondary(result);
-            t = speed_tertiary(result);
-            break;
-    }
+    PriorityMetrics m = get_priority_metrics(result, hw, priority);
 
     // Normalize each metric to [0, 1]
-    double np = normalize(p, min_primary, max_primary);
-    double ns = normalize(s, min_secondary, max_secondary);
-    double nt = normalize(t, min_tertiary, max_tertiary);
+    double np = normalize(m.primary, min_primary, max_primary);
+    double ns = normalize(m.secondary, min_secondary, max_secondary);
+    double nt = normalize(m.tertiary, min_tertiary, max_tertiary);
 
     // Weighted combination: 70% primary, 20% secondary, 10% tertiary
     double raw_score = np * 0.7 + ns * 0.2 + nt * 0.1;
@@ -206,33 +205,10 @@ void sort_by_priority(std::vector<StrategyResult>& results, PriorityMode priorit
     for (const auto& r : results) {
         if (!r.prediction.viable) continue;
 
-        double p, s, t;
-        switch (priority) {
-            case PriorityMode::SPEED:
-                p = speed_primary(r);
-                s = speed_secondary(r);
-                t = speed_tertiary(r);
-                break;
-            case PriorityMode::QUALITY:
-                p = quality_primary(r);
-                s = quality_secondary(r);
-                t = quality_tertiary(r);
-                break;
-            case PriorityMode::SAFETY:
-                p = safety_primary_val(r, hw);
-                s = safety_secondary(r);
-                t = safety_tertiary(r);
-                break;
-            default:
-                p = speed_primary(r);
-                s = speed_secondary(r);
-                t = speed_tertiary(r);
-                break;
-        }
-
-        min_p = std::min(min_p, p);  max_p = std::max(max_p, p);
-        min_s = std::min(min_s, s);  max_s = std::max(max_s, s);
-        min_t = std::min(min_t, t);  max_t = std::max(max_t, t);
+        PriorityMetrics m = get_priority_metrics(r, hw, priority);
+        min_p = std::min(min_p, m.primary);   max_p = std::max(max_p, m.primary);
+        min_s = std::min(min_s, m.secondary);  max_s = std::max(max_s, m.secondary);
+        min_t = std::min(min_t, m.tertiary);   max_t = std::max(max_t, m.tertiary);
     }
 
     // =========================================================================
