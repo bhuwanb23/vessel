@@ -271,6 +271,7 @@ add_executable(e2e_test
     ${PREDICTOR_SOURCES}
     ${HOTCOLD_SOURCES}
     ${PLATFORM_SOURCES}
+    src/web/stream_sampler.cpp
 )
 
 target_include_directories(e2e_test PRIVATE ${SHARED_INCLUDE_DIRS})
@@ -402,6 +403,7 @@ add_executable(step11_test
 if(PLATFORM_WINDOWS)
     list(APPEND step11_test_SOURCES
         src/platform/nvidia_profiler.cpp
+        include/nvml_loader.cpp
     )
     target_sources(step11_test PRIVATE ${step11_test_SOURCES})
 endif()
