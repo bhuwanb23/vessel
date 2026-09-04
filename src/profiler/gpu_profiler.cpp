@@ -99,8 +99,16 @@ std::vector<GpuProfile> profile_gpus() {
         return profiles;
     }
 
+    // NVML requires nvmlInit() before any device queries
+    nvmlReturn_t result = nvml_fn_Init();
+    if (result != NVML_SUCCESS) {
+        fprintf(stderr, "Error: nvmlInit() failed: %s\n",
+                nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");
+        return profiles;
+    }
+
     unsigned int device_count = 0;
-    nvmlReturn_t result = nvml_fn_DeviceGetCount(&device_count);
+    result = nvml_fn_DeviceGetCount(&device_count);
     if (result != NVML_SUCCESS) {
         fprintf(stderr, "Error: nvmlDeviceGetCount() failed: %s\n",
                 nvml_fn_ErrorString ? nvml_fn_ErrorString(result) : "unknown");

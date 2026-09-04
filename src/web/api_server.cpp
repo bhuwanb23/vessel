@@ -501,6 +501,10 @@ static void handle_completion(
                     // Send [DONE]
                     send_sse_done(sink);
 
+                    // Signal httplib that the stream is complete (stops the
+                    // provider loop; without this the whole generation repeats)
+                    sink.done();
+
                     // Update stats
                     session->prompt_tokens += prompt_tokens;
                     session->completion_tokens += completion_tokens;
@@ -514,10 +518,15 @@ static void handle_completion(
                     std::string data = "data: " + err.dump() + "\n\n";
                     sink.write(data.c_str(), data.size());
                     send_sse_done(sink);
+                    sink.done();
                 };
 
                 // Run streaming inference
                 execute_streaming(session->model, session->ctx, formatted_prompt, stream_config, callbacks);
+
+                // Safety net: if neither on_done nor on_error fired (e.g. a
+                // path without callbacks), still terminate the stream.
+                sink.done();
 
                 return true;
             });
